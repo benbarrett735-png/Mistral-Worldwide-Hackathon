@@ -1,0 +1,13 @@
+.env
+__pycache__/
+*.pyc
+.DS_Store
+autopilot_adapter/output/
+*.plan
+node_modules/
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.cursor/

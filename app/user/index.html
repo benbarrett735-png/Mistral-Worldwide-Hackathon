@@ -1,0 +1,500 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Louise</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #fff; color: #1a1a1a; height: 100dvh; display: flex; flex-direction: column; }
+
+    #map { flex: 1; min-height: 0; }
+
+    .panel {
+      padding: 1.25rem 1.25rem 1.5rem;
+      background: #fff;
+      border-top: 1px solid #e5e7eb;
+      flex-shrink: 0;
+      max-height: 50vh;
+      overflow-y: auto;
+      box-shadow: 0 -4px 24px rgba(0,0,0,0.06);
+    }
+
+    .logo {
+      display: flex; align-items: center; gap: 0.5rem;
+      margin-bottom: 0.6rem;
+    }
+    .logo-icon {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; color: #fff;
+    }
+    .logo-text { font-size: 1.15rem; font-weight: 700; color: #1a1a1a; letter-spacing: -0.02em; }
+
+    .status { font-size: 0.82rem; color: #6b7280; margin-bottom: 0.75rem; min-height: 1rem; }
+
+    /* Inputs */
+    .input-group { margin: 0.5rem 0; position: relative; }
+    .input-group label {
+      display: block; font-size: 0.7rem; font-weight: 600;
+      text-transform: uppercase; letter-spacing: 0.06em;
+      color: #9ca3af; margin-bottom: 0.25rem;
+    }
+    .input-group input {
+      width: 100%; padding: 0.7rem 0.85rem; font-size: 0.92rem;
+      border: 1.5px solid #e5e7eb; border-radius: 10px;
+      background: #f9fafb; color: #1a1a1a; outline: none;
+      font-family: inherit; transition: border-color 0.2s;
+    }
+    .input-group input:focus { border-color: #2563eb; background: #fff; }
+    .input-group input::placeholder { color: #c5c8ce; }
+
+    .location-row {
+      display: flex; align-items: center; gap: 0.5rem;
+      background: #f0f7ff; border: 1.5px solid #dbeafe;
+      border-radius: 10px; padding: 0.6rem 0.85rem; margin: 0.5rem 0;
+      font-size: 0.85rem; color: #2563eb;
+    }
+    .location-row .dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #2563eb; flex-shrink: 0;
+    }
+    .location-row .coords { flex: 1; font-weight: 500; }
+
+    /* Buttons */
+    button {
+      display: block; width: 100%; padding: 0.85rem 1rem;
+      margin: 0.5rem 0; font-size: 0.95rem; font-weight: 600;
+      border: none; border-radius: 12px; cursor: pointer;
+      font-family: inherit; transition: all 0.15s;
+    }
+    button:disabled { opacity: 0.35; cursor: not-allowed; }
+    button:active:not(:disabled) { transform: scale(0.98); }
+
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
+    .btn-order { background: linear-gradient(135deg, #2563eb, #7c3aed); color: #fff; font-size: 1rem; }
+    .btn-order:hover:not(:disabled) { opacity: 0.92; }
+    .btn-danger { background: #dc2626; color: #fff; font-size: 1.05rem; letter-spacing: 0.02em; }
+    .btn-safe { background: #16a34a; color: #fff; }
+    .btn-outline {
+      background: transparent; color: #6b7280;
+      border: 1.5px solid #e5e7eb; font-weight: 500; font-size: 0.85rem;
+    }
+    .btn-outline:hover { border-color: #d1d5db; background: #f9fafb; }
+    .btn-small { padding: 0.6rem 0.8rem; font-size: 0.85rem; }
+
+    /* Route card */
+    .route-card {
+      background: #f9fafb; border: 1px solid #e5e7eb;
+      border-radius: 10px; padding: 0.8rem; margin: 0.5rem 0;
+      font-size: 0.82rem; color: #6b7280; line-height: 1.6;
+    }
+    .route-card strong { color: #1a1a1a; }
+
+    /* Drone status */
+    .drone-status {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.7rem 0.85rem; margin: 0.5rem 0;
+      background: #f0fdf4; border: 1px solid #bbf7d0;
+      border-radius: 10px; font-size: 0.85rem; color: #15803d;
+    }
+    .drone-status .pulse-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: #22c55e; animation: pulse 1.5s infinite;
+    }
+    @keyframes pulse { 50% { opacity: 0.5; } }
+
+    /* Distress panel */
+    .distress-panel {
+      background: #fef2f2; border: 1.5px solid #fecaca;
+      border-radius: 12px; padding: 1rem; margin: 0.5rem 0;
+      text-align: center;
+    }
+    .distress-panel p { font-size: 0.85rem; color: #991b1b; margin-bottom: 0.5rem; }
+    .countdown {
+      font-size: 3rem; font-weight: 800; color: #dc2626;
+      padding: 0.3rem 0; line-height: 1;
+    }
+
+    /* Map marker popups */
+    .leaflet-popup-content-wrapper { border-radius: 10px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="panel" id="panel">
+    <div class="logo">
+      <div class="logo-icon">L</div>
+      <span class="logo-text">Louise</span>
+    </div>
+    <p class="status" id="status">Your personal safety escort</p>
+
+    <!-- STEP 0: Welcome -->
+    <div id="step0">
+      <p style="font-size:0.85rem;color:#6b7280;margin-bottom:0.75rem">
+        Louise dispatches a drone to escort you home safely. It watches over you the entire way.
+      </p>
+      <button class="btn-primary" id="btnStart">Walk me home</button>
+    </div>
+
+    <!-- STEP 1: Set origin + destination -->
+    <div id="step1" style="display:none">
+      <button class="btn-primary btn-small" id="btnLocate" style="margin-bottom:0.6rem">
+        <span style="margin-right:0.3rem">📍</span> Share my location
+      </button>
+      <div id="originDisplay" style="display:none"></div>
+
+      <div class="input-group">
+        <label>Where are you going?</label>
+        <input id="destInput" type="text" placeholder="Search address or tap the map..." />
+      </div>
+      <div id="destDisplay" style="display:none"></div>
+
+      <p style="font-size:0.75rem;color:#9ca3af;margin-top:0.3rem">
+        Tap the map to set your destination, or type an address above
+      </p>
+    </div>
+
+    <!-- STEP 2: Route ready -->
+    <div id="step2" style="display:none">
+      <div class="route-card" id="routeCard"></div>
+      <button class="btn-order" id="btnOrder">
+        <span style="margin-right:0.4rem">🛸</span> Request drone escort
+      </button>
+      <button class="btn-outline" id="btnReset">Change route</button>
+    </div>
+
+    <!-- STEP 3: Drone active -->
+    <div id="step3" style="display:none">
+      <div class="drone-status" id="droneStatusCard">
+        <span class="pulse-dot"></span>
+        <span id="droneStatusText">Drone dispatched from hub</span>
+      </div>
+      <div class="route-card" id="etaCard"></div>
+      <button class="btn-danger" id="btnDistress">I need help</button>
+      <button class="btn-outline" id="btnSafe">I'm safe &mdash; cancel escort</button>
+    </div>
+
+    <!-- STEP 4: Distress countdown -->
+    <div id="step4" style="display:none">
+      <div class="distress-panel">
+        <p><strong>Alert sent.</strong> Dismiss within 15 seconds or emergency services will be contacted.</p>
+        <div class="countdown" id="countdown">15</div>
+        <button class="btn-safe" id="btnDismiss" style="margin-top:0.5rem">I'm safe &mdash; cancel alert</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const HUB = [48.8809, 2.3553];
+    const PARIS = [48.8566, 2.3522];
+    const API = '';
+
+    // ── Map ──────────────────────────────────────────────────────────────
+    const map = L.map('map', { zoomControl: false }).setView(PARIS, 14);
+
+    // Clean Carto light basemap (Google Maps style)
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+      maxZoom: 19
+    }).addTo(map);
+
+    L.control.zoom({ position: 'topright' }).addTo(map);
+
+    // Hub marker
+    const hubIcon = L.divIcon({
+      className: '',
+      html: '<div style="width:32px;height:32px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:8px;border:2.5px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.18);display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff">L</div>',
+      iconSize: [32, 32], iconAnchor: [16, 16],
+    });
+    L.marker(HUB, { icon: hubIcon }).addTo(map).bindPopup('<strong>Louise Hub</strong><br>Gare du Nord, Paris');
+
+    // ── State ────────────────────────────────────────────────────────────
+    let origin = null, dest = null;
+    let originMarker = null, destMarker = null;
+    let routeLayer = null, hubToUserLayer = null, trackLayer = null, homeLayer = null;
+    let droneMarker = null, ws = null;
+    let countdownInterval = null, countdownLeft = 15;
+
+    function showStep(n) {
+      ['step0','step1','step2','step3','step4'].forEach(id =>
+        document.getElementById(id).style.display = id === `step${n}` ? 'block' : 'none'
+      );
+    }
+    function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+    // ── Step 0 ───────────────────────────────────────────────────────────
+    document.getElementById('btnStart').onclick = () => {
+      showStep(1);
+      setStatus('Set your start location and destination');
+      map.on('click', onMapClick);
+    };
+
+    // ── Step 1: Location + Destination ──────────────────────────────────
+    document.getElementById('btnLocate').onclick = async () => {
+      setStatus('Getting your location...');
+      document.getElementById('btnLocate').disabled = true;
+      try {
+        const pos = await new Promise((res, rej) =>
+          navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 8000 })
+        );
+        origin = [pos.coords.latitude, pos.coords.longitude];
+      } catch {
+        origin = [48.8795, 2.3565];
+      }
+      placeOrigin(origin);
+      document.getElementById('btnLocate').disabled = false;
+    };
+
+    function placeOrigin(latlng) {
+      origin = latlng;
+      if (originMarker) map.removeLayer(originMarker);
+      const icon = L.divIcon({
+        className: '',
+        html: '<div style="width:14px;height:14px;background:#2563eb;border:2.5px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.2)"></div>',
+        iconSize: [14, 14], iconAnchor: [7, 7],
+      });
+      originMarker = L.marker(origin, { icon }).addTo(map);
+      map.panTo(origin);
+      document.getElementById('originDisplay').style.display = 'block';
+      document.getElementById('originDisplay').innerHTML = `
+        <div class="location-row"><span class="dot"></span><span class="coords">You: ${origin[0].toFixed(5)}, ${origin[1].toFixed(5)}</span></div>
+      `;
+      setStatus('Now set your destination');
+      if (dest) fetchRoute();
+    }
+
+    function placeDest(latlng) {
+      dest = latlng;
+      if (destMarker) map.removeLayer(destMarker);
+      destMarker = L.marker(dest, {
+        icon: L.divIcon({
+          className: '',
+          html: '<div style="width:12px;height:12px;background:#dc2626;border:2.5px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.15)"></div>',
+          iconSize: [12, 12], iconAnchor: [6, 6],
+        })
+      }).addTo(map).bindPopup('Destination');
+      document.getElementById('destDisplay').style.display = 'block';
+      document.getElementById('destDisplay').innerHTML = `
+        <div class="location-row" style="background:#fef2f2;border-color:#fecaca;color:#dc2626">
+          <span class="dot" style="background:#dc2626"></span>
+          <span class="coords">${dest[0].toFixed(5)}, ${dest[1].toFixed(5)}</span>
+        </div>
+      `;
+      document.getElementById('destInput').value = `${dest[0].toFixed(5)}, ${dest[1].toFixed(5)}`;
+      if (origin) fetchRoute();
+    }
+
+    function onMapClick(e) {
+      if (!origin) {
+        placeOrigin([e.latlng.lat, e.latlng.lng]);
+        return;
+      }
+      placeDest([e.latlng.lat, e.latlng.lng]);
+      map.off('click', onMapClick);
+    }
+
+    // Address search (geocode via Nominatim)
+    let searchTimeout = null;
+    document.getElementById('destInput').addEventListener('input', (e) => {
+      clearTimeout(searchTimeout);
+      const q = e.target.value.trim();
+      if (q.length < 3) return;
+      searchTimeout = setTimeout(async () => {
+        try {
+          const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=fr`);
+          const results = await resp.json();
+          if (results.length) {
+            const r = results[0];
+            placeDest([parseFloat(r.lat), parseFloat(r.lon)]);
+            map.flyTo(dest, 15);
+            map.off('click', onMapClick);
+          }
+        } catch {}
+      }, 600);
+    });
+
+    // ── Fetch route ──────────────────────────────────────────────────────
+    async function fetchRoute() {
+      setStatus('Calculating walking route...');
+      try {
+        const resp = await fetch(`${API}/api/route`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ origin, destination: dest }),
+        });
+        const data = await resp.json();
+        const latlngs = data.coords.map(c => [c[1], c[0]]);
+        if (routeLayer) map.removeLayer(routeLayer);
+        routeLayer = L.polyline(latlngs, { color: '#2563eb', weight: 4, opacity: 0.7 }).addTo(map);
+        map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
+
+        const dist = haversine(origin, dest);
+        const mins = Math.max(1, Math.round(dist / 80));
+        document.getElementById('routeCard').innerHTML = `
+          <strong>Walking route</strong><br>
+          Distance: ~${Math.round(dist)}m &nbsp;&bull;&nbsp; Est. ${mins} min<br>
+          <span style="color:#9ca3af;font-size:0.78rem">Drone will escort you the entire way</span>
+        `;
+        window._orsCoords = data.coords;
+        showStep(2);
+        setStatus('Route ready');
+      } catch (e) {
+        setStatus('Route error: ' + e.message);
+      }
+    }
+
+    // ── Step 2: Order drone ──────────────────────────────────────────────
+    document.getElementById('btnOrder').onclick = async () => {
+      setStatus('Dispatching drone from Louise Hub...');
+      document.getElementById('btnOrder').disabled = true;
+      try {
+        const resp = await fetch(`${API}/api/order`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ origin, destination: dest, route: window._orsCoords || null }),
+        });
+        const data = await resp.json();
+
+        // Draw flight paths
+        if (data.routes) {
+          if (hubToUserLayer) map.removeLayer(hubToUserLayer);
+          if (trackLayer) map.removeLayer(trackLayer);
+          if (homeLayer) map.removeLayer(homeLayer);
+          hubToUserLayer = L.polyline(data.routes.hub_to_user, { color: '#f59e0b', weight: 2, dashArray: '6,4', opacity: 0.5 }).addTo(map);
+          trackLayer     = L.polyline(data.routes.track,       { color: '#22c55e', weight: 2, dashArray: '6,4', opacity: 0.5 }).addTo(map);
+          homeLayer      = L.polyline(data.routes.home,        { color: '#94a3b8', weight: 2, dashArray: '4,4', opacity: 0.4 }).addTo(map);
+        }
+
+        document.getElementById('etaCard').innerHTML = `
+          <strong>Drone en route</strong><br>
+          Phases: approach (${data.waypoints.hub_to_user} wp) &rarr; escort (${data.waypoints.track} wp) &rarr; return (${data.waypoints.home} wp)
+        `;
+        showStep(3);
+        setStatus('Drone is on its way to you');
+        connectWebSocket();
+      } catch (e) {
+        setStatus('Order failed: ' + e.message);
+        document.getElementById('btnOrder').disabled = false;
+      }
+    };
+
+    document.getElementById('btnReset').onclick = () => {
+      [routeLayer, originMarker, destMarker, hubToUserLayer, trackLayer, homeLayer].forEach(l => { if (l) map.removeLayer(l); });
+      origin = dest = null;
+      window._orsCoords = null;
+      document.getElementById('originDisplay').style.display = 'none';
+      document.getElementById('destDisplay').style.display = 'none';
+      document.getElementById('destInput').value = '';
+      showStep(1);
+      setStatus('Set your start location and destination');
+      map.on('click', onMapClick);
+    };
+
+    // ── WebSocket ────────────────────────────────────────────────────────
+    function connectWebSocket() {
+      const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+      ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+      ws.onmessage = (e) => {
+        const msg = JSON.parse(e.data);
+        if (msg.type === 'position') {
+          updateDrone(msg.lat, msg.lng, msg.phase);
+          updateDroneStatus(msg.phase, msg.waypoint_index, msg.total_waypoints);
+        } else if (msg.type === 'phase') {
+          setStatus(phaseLabel(msg.phase));
+        } else if (msg.type === 'complete') {
+          setStatus('You arrived safely. Drone returning to hub.');
+          if (droneMarker) setTimeout(() => { if (droneMarker) map.removeLayer(droneMarker); }, 3000);
+        }
+      };
+      ws.onclose = () => {};
+      setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 20000);
+    }
+
+    const droneIcon = L.divIcon({
+      className: '',
+      html: '<div style="width:20px;height:20px;background:#fff;border:2.5px solid #2563eb;border-radius:50%;box-shadow:0 2px 8px rgba(37,99,235,0.35);display:flex;align-items:center;justify-content:center;font-size:11px">🛸</div>',
+      iconSize: [20, 20], iconAnchor: [10, 10],
+    });
+
+    function updateDrone(lat, lng, phase) {
+      if (!droneMarker) {
+        droneMarker = L.marker([lat, lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
+      } else {
+        droneMarker.setLatLng([lat, lng]);
+      }
+    }
+
+    function phaseLabel(p) {
+      return { hub_to_user: 'Drone approaching you', track: 'Drone is escorting you', home: 'Drone returning to hub' }[p] || p;
+    }
+
+    function updateDroneStatus(phase, idx, total) {
+      const pct = Math.round((idx / total) * 100);
+      document.getElementById('droneStatusText').textContent = `${phaseLabel(phase)} — ${pct}%`;
+    }
+
+    // ── Distress ─────────────────────────────────────────────────────────
+    document.getElementById('btnDistress').onclick = () => {
+      showStep(4);
+      startCountdown();
+      if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
+    };
+
+    document.getElementById('btnSafe').onclick = () => {
+      if (ws) ws.close();
+      [hubToUserLayer, trackLayer, homeLayer].forEach(l => { if (l) map.removeLayer(l); });
+      if (droneMarker) map.removeLayer(droneMarker);
+      droneMarker = null;
+      showStep(0);
+      setStatus('Escort cancelled. Stay safe!');
+    };
+
+    document.getElementById('btnDismiss').onclick = () => {
+      clearInterval(countdownInterval);
+      showStep(3);
+      setStatus('Alert dismissed. Drone continues escort.');
+    };
+
+    function startCountdown() {
+      countdownLeft = 15;
+      document.getElementById('countdown').textContent = countdownLeft;
+      countdownInterval = setInterval(() => {
+        countdownLeft--;
+        document.getElementById('countdown').textContent = countdownLeft;
+        if (countdownLeft <= 0) {
+          clearInterval(countdownInterval);
+          triggerEmergency();
+        }
+      }, 1000);
+    }
+
+    function triggerEmergency() {
+      document.getElementById('countdown').textContent = 'SENT';
+      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'emergency', origin }));
+      setTimeout(() => {
+        setStatus('Emergency services have been notified');
+        showStep(3);
+        document.getElementById('droneStatusCard').style.background = '#fef2f2';
+        document.getElementById('droneStatusCard').style.borderColor = '#fecaca';
+        document.getElementById('droneStatusText').textContent = 'Emergency mode — drone locked on your position';
+        document.getElementById('droneStatusText').style.color = '#dc2626';
+      }, 1500);
+    }
+
+    // ── Util ─────────────────────────────────────────────────────────────
+    function haversine([lat1, lng1], [lat2, lng2]) {
+      const R = 6371000, dLat = (lat2-lat1)*Math.PI/180, dLng = (lng2-lng1)*Math.PI/180;
+      const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    }
+  </script>
+</body>
+</html>

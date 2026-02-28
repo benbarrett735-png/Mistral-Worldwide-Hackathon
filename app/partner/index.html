@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Louise — Mission Control</title>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #f8f9fb; color: #1a1a1a; height: 100vh; overflow: hidden; }
+    .layout { display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
+    @media (max-width: 960px) { .layout { grid-template-columns: 1fr; grid-template-rows: 50vh 1fr; } }
+    #map { width: 100%; height: 100%; }
+
+    /* Sidebar */
+    .sidebar { background: #fff; border-left: 1px solid #e5e7eb; overflow-y: auto; display: flex; flex-direction: column; }
+
+    .header {
+      padding: 0.9rem 1.1rem; border-bottom: 1px solid #e5e7eb;
+      display: flex; align-items: center; gap: 0.6rem;
+      background: #fff; position: sticky; top: 0; z-index: 10;
+    }
+    .logo-icon {
+      width: 28px; height: 28px; border-radius: 8px;
+      background: linear-gradient(135deg, #2563eb, #7c3aed);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; color: #fff; flex-shrink: 0;
+    }
+    .logo-text { font-size: 0.95rem; font-weight: 700; color: #1a1a1a; }
+    .logo-sub { font-size: 0.75rem; color: #9ca3af; font-weight: 400; margin-left: 0.3rem; }
+    .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: #dc2626; margin-left: auto; flex-shrink: 0; }
+    .ws-dot.connected { background: #22c55e; }
+
+    .section { padding: 0.8rem 1.1rem; border-bottom: 1px solid #f3f4f6; }
+    .section-title {
+      font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.08em; color: #9ca3af; margin-bottom: 0.5rem;
+    }
+
+    /* Phase cards */
+    .phase {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.55rem 0.7rem; border-radius: 8px; margin: 0.25rem 0;
+      background: #f9fafb; border: 1px solid #f3f4f6;
+      transition: all 0.3s;
+    }
+    .phase.active { background: #eff6ff; border-color: #bfdbfe; }
+    .phase.done { background: #f0fdf4; border-color: #bbf7d0; }
+    .ph-icon { font-size: 1rem; width: 1.3rem; text-align: center; }
+    .ph-label { font-size: 0.82rem; font-weight: 500; flex: 1; }
+    .ph-sub { font-size: 0.68rem; color: #9ca3af; }
+    .ph-badge {
+      padding: 0.12rem 0.45rem; border-radius: 20px;
+      font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+    }
+    .ph-badge.pending { background: #f3f4f6; color: #9ca3af; }
+    .ph-badge.active  { background: #2563eb; color: #fff; animation: pulse 1.5s infinite; }
+    .ph-badge.done    { background: #16a34a; color: #fff; }
+    @keyframes pulse { 50% { opacity: 0.6; } }
+
+    /* Telemetry */
+    .telemetry { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
+    .tele-card { background: #f9fafb; border: 1px solid #f3f4f6; border-radius: 8px; padding: 0.5rem 0.6rem; }
+    .tele-label { font-size: 0.6rem; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; }
+    .tele-value { font-size: 1.05rem; font-weight: 700; color: #1a1a1a; }
+    .tele-unit  { font-size: 0.6rem; color: #9ca3af; margin-left: 0.15rem; }
+
+    /* Camera */
+    .camera-wrap {
+      position: relative; background: #111; border-radius: 8px; overflow: hidden;
+      aspect-ratio: 16/9; border: 1px solid #e5e7eb;
+    }
+    .camera-wrap video, .camera-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+    .camera-overlay {
+      position: absolute; inset: 0;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 0.75rem; color: #6b7280; background: #f3f4f6;
+    }
+    .camera-badge {
+      position: absolute; top: 0.4rem; right: 0.4rem;
+      background: rgba(0,0,0,0.65); padding: 0.15rem 0.4rem; border-radius: 4px;
+      font-size: 0.6rem; font-weight: 600; color: #22c55e; letter-spacing: 0.04em;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .camera-badge.alert { color: #ef4444; }
+
+    /* Vision AI indicators */
+    .ai-card {
+      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.6rem 0.7rem; border-radius: 8px; margin: 0.25rem 0;
+      transition: all 0.3s;
+    }
+    .ai-card.safe { background: #f0fdf4; border: 1px solid #bbf7d0; }
+    .ai-card.distress { background: #fef2f2; border: 1px solid #fecaca; animation: pulse 0.8s infinite; }
+    .ai-card.idle { background: #f9fafb; border: 1px solid #f3f4f6; }
+    .ai-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+    .ai-dot.safe { background: #22c55e; }
+    .ai-dot.distress { background: #ef4444; }
+    .ai-dot.idle { background: #d1d5db; }
+    .ai-label { font-size: 0.82rem; font-weight: 600; }
+    .ai-detail { font-size: 0.68rem; color: #9ca3af; }
+    .ai-value { margin-left: auto; font-size: 0.72rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+
+    /* Waypoint file display */
+    .wp-files { margin: 0.3rem 0; }
+    .wp-file {
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.4rem 0.6rem; margin: 0.2rem 0;
+      background: #f9fafb; border: 1px solid #f3f4f6; border-radius: 6px;
+      font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: #6b7280;
+    }
+    .wp-file .file-icon { color: #2563eb; font-size: 0.9rem; }
+    .wp-file .count { margin-left: auto; font-weight: 600; color: #1a1a1a; }
+
+    /* Event log */
+    .event-log { max-height: 140px; overflow-y: auto; }
+    .log-entry {
+      font-size: 0.68rem; padding: 0.2rem 0;
+      border-bottom: 1px solid #f9fafb; color: #6b7280;
+      font-family: 'JetBrains Mono', monospace;
+    }
+    .log-entry.warn { color: #d97706; }
+    .log-entry.danger { color: #dc2626; }
+    .log-entry .ts { color: #c5c8ce; margin-right: 0.4rem; }
+
+    /* Emergency banner */
+    .emergency-banner {
+      display: none; background: #fef2f2; padding: 0.7rem 1rem;
+      border-top: 2px solid #dc2626; text-align: center;
+      font-size: 0.85rem; font-weight: 700; color: #dc2626;
+      animation: pulse 0.8s infinite;
+    }
+  </style>
+</head>
+<body>
+<div class="layout">
+  <div id="map"></div>
+
+  <div class="sidebar">
+    <div class="header">
+      <div class="logo-icon">L</div>
+      <div>
+        <span class="logo-text">Louise</span>
+        <span class="logo-sub">Mission Control</span>
+      </div>
+      <div class="ws-dot" id="wsDot" title="Disconnected"></div>
+    </div>
+
+    <!-- Phases -->
+    <div class="section">
+      <div class="section-title">Flight phases</div>
+      <div class="phase" id="ph1">
+        <span class="ph-icon">🚁</span>
+        <div><div class="ph-label">Approach</div><div class="ph-sub">Hub &rarr; User</div></div>
+        <span class="ph-badge pending" id="ph1-badge">Pending</span>
+      </div>
+      <div class="phase" id="ph2">
+        <span class="ph-icon">👁</span>
+        <div><div class="ph-label">Escort</div><div class="ph-sub">Following user home</div></div>
+        <span class="ph-badge pending" id="ph2-badge">Pending</span>
+      </div>
+      <div class="phase" id="ph3">
+        <span class="ph-icon">🏠</span>
+        <div><div class="ph-label">Return</div><div class="ph-sub">Destination &rarr; Hub</div></div>
+        <span class="ph-badge pending" id="ph3-badge">Pending</span>
+      </div>
+    </div>
+
+    <!-- Telemetry -->
+    <div class="section">
+      <div class="section-title">Telemetry</div>
+      <div class="telemetry">
+        <div class="tele-card">
+          <div class="tele-label">Altitude</div>
+          <div><span class="tele-value" id="telAlt">--</span><span class="tele-unit">m</span></div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">Progress</div>
+          <div><span class="tele-value" id="telPct">0</span><span class="tele-unit">%</span></div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">Phase</div>
+          <div><span class="tele-value" id="telPhase" style="font-size:0.72rem">--</span></div>
+        </div>
+        <div class="tele-card">
+          <div class="tele-label">Waypoint</div>
+          <div><span class="tele-value" id="telWp">--</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Waypoint files -->
+    <div class="section">
+      <div class="section-title">Generated waypoint files</div>
+      <div class="wp-files" id="wpFiles">
+        <div style="font-size:0.72rem;color:#c5c8ce;padding:0.3rem 0">Waiting for mission...</div>
+      </div>
+    </div>
+
+    <!-- Camera feed -->
+    <div class="section">
+      <div class="section-title">Drone camera</div>
+      <div class="camera-wrap">
+        <div class="camera-overlay" id="cameraOverlay"><span>No feed</span></div>
+        <video id="droneFeed" autoplay muted loop style="display:none"></video>
+        <span class="camera-badge" id="cameraBadge" style="display:none">LIVE</span>
+      </div>
+    </div>
+
+    <!-- Vision AI -->
+    <div class="section">
+      <div class="section-title">Louise Vision AI</div>
+      <div class="ai-card idle" id="hsCard">
+        <span class="ai-dot idle" id="hsDot"></span>
+        <div>
+          <div class="ai-label" id="hsLabel">Safety monitor</div>
+          <div class="ai-detail" id="hsDetail">Awaiting feed</div>
+        </div>
+        <span class="ai-value" id="hsValue">--</span>
+      </div>
+      <div class="ai-card idle" id="fsCard">
+        <span class="ai-dot idle" id="fsDot"></span>
+        <div>
+          <div class="ai-label" id="fsLabel">Autopilot</div>
+          <div class="ai-detail" id="fsDetail">Awaiting mission</div>
+        </div>
+        <span class="ai-value" id="fsValue">--</span>
+      </div>
+    </div>
+
+    <!-- Event log -->
+    <div class="section" style="flex:1">
+      <div class="section-title">Event log</div>
+      <div class="event-log" id="eventLog"></div>
+    </div>
+
+    <div class="emergency-banner" id="emergencyBanner">
+      EMERGENCY — USER DISTRESS DETECTED
+    </div>
+  </div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+  const HUB = [48.8809, 2.3553];
+  const PARIS = [48.8566, 2.3522];
+
+  const map = L.map('map', { zoomControl: true }).setView(PARIS, 14);
+  L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    attribution: '&copy; OSM &copy; CARTO', maxZoom: 19
+  }).addTo(map);
+
+  // Hub marker
+  const hubIcon = L.divIcon({
+    className: '',
+    html: '<div style="width:36px;height:36px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:10px;border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,0.18);display:flex;align-items:center;justify-content:center;font-size:17px;color:#fff;font-weight:700">L</div>',
+    iconSize: [36, 36], iconAnchor: [18, 18],
+  });
+  L.marker(HUB, { icon: hubIcon }).addTo(map).bindPopup('<strong>Louise Hub</strong><br>Gare du Nord, Paris');
+
+  // Hub range circle
+  L.circle(HUB, { radius: 3000, color: '#2563eb', fillColor: '#2563eb', fillOpacity: 0.04, weight: 1, dashArray: '4,4' }).addTo(map);
+
+  let droneMarker = null;
+  let routeLayers = {};
+  const phaseOrder = ['hub_to_user', 'track', 'home'];
+  const phaseDone = new Set();
+  let currentPhase = null;
+
+  // ── WebSocket ─────────────────────────────────────────────────────────
+  function connect() {
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws`);
+    const dot = document.getElementById('wsDot');
+
+    ws.onopen = () => {
+      dot.classList.add('connected'); dot.title = 'Connected';
+      addLog('Connected to Louise server');
+      setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 20000);
+    };
+    ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
+    ws.onclose = () => {
+      dot.classList.remove('connected'); dot.title = 'Reconnecting...';
+      addLog('Disconnected — retrying...', 'warn');
+      setTimeout(connect, 3000);
+    };
+  }
+  connect();
+
+  function handleEvent(msg) {
+    switch (msg.type) {
+      case 'position':  updateDrone(msg); updateTelemetry(msg); break;
+      case 'phase':     handlePhaseChange(msg.phase); break;
+      case 'complete':  handleComplete(); break;
+      case 'emergency': handleEmergency(msg); break;
+      case 'flystroll': handleFlystroll(msg); break;
+      case 'pong': break;
+    }
+  }
+
+  // ── Drone on map ──────────────────────────────────────────────────────
+  const droneIcon = L.divIcon({
+    className: '',
+    html: '<div style="width:22px;height:22px;background:#fff;border:2.5px solid #2563eb;border-radius:50%;box-shadow:0 2px 8px rgba(37,99,235,0.3);display:flex;align-items:center;justify-content:center;font-size:12px">🛸</div>',
+    iconSize: [22, 22], iconAnchor: [11, 11],
+  });
+
+  function updateDrone(msg) {
+    if (!droneMarker) {
+      droneMarker = L.marker([msg.lat, msg.lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
+    } else {
+      droneMarker.setLatLng([msg.lat, msg.lng]);
+    }
+  }
+
+  function updateTelemetry(msg) {
+    document.getElementById('telAlt').textContent = Math.round(msg.alt);
+    document.getElementById('telPct').textContent = Math.round((msg.waypoint_index / msg.total_waypoints) * 100);
+    document.getElementById('telPhase').textContent = (msg.phase || '--').replace(/_/g, ' ');
+    document.getElementById('telWp').textContent = `${msg.waypoint_index + 1}/${msg.total_waypoints}`;
+  }
+
+  // ── Phases ────────────────────────────────────────────────────────────
+  const phaseIds = { hub_to_user: 'ph1', track: 'ph2', home: 'ph3' };
+  const phaseLabels = { hub_to_user: 'Approach', track: 'Escort', home: 'Return' };
+
+  function handlePhaseChange(phase) {
+    addLog(`Phase: ${phaseLabels[phase] || phase}`);
+    if (currentPhase && currentPhase !== phase) { phaseDone.add(currentPhase); setBadge(currentPhase, 'done'); }
+    currentPhase = phase;
+    setBadge(phase, 'active');
+    if (phase === 'track') startCamera();
+  }
+
+  function handleComplete() {
+    if (currentPhase) { phaseDone.add(currentPhase); setBadge(currentPhase, 'done'); }
+    addLog('Mission complete — drone returned');
+    stopCamera();
+    if (droneMarker) { setTimeout(() => { map.removeLayer(droneMarker); droneMarker = null; }, 2000); }
+  }
+
+  function setBadge(phase, state) {
+    const el = document.getElementById(phaseIds[phase]);
+    const badge = document.getElementById(`${phaseIds[phase]}-badge`);
+    if (!el || !badge) return;
+    el.className = `phase ${state}`;
+    badge.className = `ph-badge ${state}`;
+    badge.textContent = state === 'done' ? 'Done' : state === 'active' ? 'Active' : 'Pending';
+  }
+
+  // ── Camera + Vision ───────────────────────────────────────────────────
+  let helpstrollInterval = null;
+
+  function startCamera() {
+    document.getElementById('cameraOverlay').style.display = 'none';
+    document.getElementById('cameraBadge').style.display = 'block';
+    addLog('Camera active — Louise Vision monitoring');
+    helpstrollInterval = setInterval(runHelpstroll, 5000);
+  }
+  function stopCamera() { clearInterval(helpstrollInterval); }
+
+  async function runHelpstroll() {
+    const video = document.getElementById('droneFeed');
+    if (video.style.display === 'none' || video.readyState < 2) return;
+    try {
+      const canvas = document.createElement('canvas');
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      canvas.getContext('2d').drawImage(video, 0, 0);
+      const b64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+      const resp = await fetch('/api/helpstroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: b64 }) });
+      const data = await resp.json();
+      setVisionAI('hs', data.status === 'DISTRESS' ? 'distress' : 'safe', data.status);
+      if (data.status === 'DISTRESS') addLog('DISTRESS detected', 'danger');
+    } catch {}
+  }
+
+  function setVisionAI(prefix, state, value) {
+    const card = document.getElementById(`${prefix}Card`);
+    const dot = document.getElementById(`${prefix}Dot`);
+    const val = document.getElementById(`${prefix}Value`);
+    card.className = `ai-card ${state}`;
+    dot.className = `ai-dot ${state}`;
+    val.textContent = value;
+    val.style.color = state === 'distress' ? '#dc2626' : state === 'safe' ? '#16a34a' : '#9ca3af';
+  }
+
+  function handleFlystroll(msg) {
+    const cmdColors = { FOLLOW: '#16a34a', AVOID_LEFT: '#d97706', AVOID_RIGHT: '#d97706', CLIMB: '#2563eb', HOVER: '#7c3aed', REPLAN: '#ea580c', DESCEND: '#6b7280' };
+    const color = cmdColors[msg.command] || '#1a1a1a';
+    setVisionAI('fs', 'safe', `${msg.command}|${msg.param}`);
+    document.getElementById('fsValue').style.color = color;
+    document.getElementById('fsDetail').textContent = `Last: ${msg.command}`;
+    const level = ['AVOID_LEFT','AVOID_RIGHT','HOVER','REPLAN'].includes(msg.command) ? 'warn' : 'info';
+    addLog(`Autopilot: ${msg.command}|${msg.param}`, level);
+  }
+
+  function handleEmergency() {
+    document.getElementById('emergencyBanner').style.display = 'block';
+    setVisionAI('hs', 'distress', 'EMERGENCY');
+    addLog('EMERGENCY — user distress signal', 'danger');
+    setTimeout(() => { document.getElementById('emergencyBanner').style.display = 'none'; }, 30000);
+  }
+
+  // ── Waypoint file display ─────────────────────────────────────────────
+  async function loadWaypoints() {
+    try {
+      const resp = await fetch('/autopilot_adapter/output/mission.json');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      drawRoutes({
+        hub_to_user: data.hub_to_user.map(w => [w.lat, w.lng]),
+        track: data.track.map(w => [w.lat, w.lng]),
+        home: data.home.map(w => [w.lat, w.lng]),
+      });
+      showWaypointFiles(data);
+    } catch {}
+  }
+  loadWaypoints();
+  // Re-check every 5 seconds to pick up new missions
+  setInterval(loadWaypoints, 5000);
+
+  function drawRoutes(routes) {
+    const colors = { hub_to_user: '#f59e0b', track: '#22c55e', home: '#94a3b8' };
+    Object.entries(colors).forEach(([key, color]) => {
+      if (routeLayers[key]) map.removeLayer(routeLayers[key]);
+      if (routes[key] && routes[key].length) {
+        routeLayers[key] = L.polyline(routes[key], { color, weight: 3, dashArray: '6,4', opacity: 0.6 }).addTo(map);
+      }
+    });
+    const all = Object.values(routes).flat();
+    if (all.length) map.fitBounds(all, { padding: [50, 50] });
+  }
+
+  function showWaypointFiles(data) {
+    const el = document.getElementById('wpFiles');
+    const h2u = data.hub_to_user ? data.hub_to_user.length : 0;
+    const trk = data.track ? data.track.length : 0;
+    const hm = data.home ? data.home.length : 0;
+    el.innerHTML = `
+      <div class="wp-file"><span class="file-icon">📄</span> mission.json <span class="count">${h2u+trk+hm} wp</span></div>
+      <div class="wp-file"><span class="file-icon">📄</span> mission.plan <span class="count">QGC</span></div>
+      <div class="wp-file"><span class="file-icon">🚁</span> hub_to_user <span class="count">${h2u}</span></div>
+      <div class="wp-file"><span class="file-icon">👁</span> track <span class="count">${trk}</span></div>
+      <div class="wp-file"><span class="file-icon">🏠</span> home <span class="count">${hm}</span></div>
+    `;
+  }
+
+  // ── Event log ─────────────────────────────────────────────────────────
+  function addLog(msg, level = 'info') {
+    const log = document.getElementById('eventLog');
+    const now = new Date().toLocaleTimeString('en-GB', { hour12: false });
+    const entry = document.createElement('div');
+    entry.className = `log-entry ${level}`;
+    entry.innerHTML = `<span class="ts">${now}</span>${msg}`;
+    log.prepend(entry);
+    while (log.children.length > 50) log.removeChild(log.lastChild);
+  }
+</script>
+</body>
+</html>

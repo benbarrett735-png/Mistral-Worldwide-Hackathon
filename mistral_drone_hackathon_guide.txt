@@ -1,0 +1,49 @@
+2-Day Execution Plan for Safety Drone System
+
+1. [0:00] "This is our safety drone system for people walking alone at night"
+2. [0:30] Show web app → Click "Summon Drone"
+3. [1:00] Show mission control screen with drone deploying
+4. [1:30] "Drone arrives" → tracking starts (show map movement)
+5. [2:00] Walk with phone → drone follows on screen
+6. [2:30] "False alarm" → dismiss → drone continues
+7. [3:00] "Real attack" → click distress → phone rings
+8. [3:15] 15 second countdown shown on screen
+9. [3:30] "No dismissal" → police called (show second phone)
+10. [4:00] Drone returns to station automatically
+11. [4:30] "This system costs €3 per use and could save lives"
+
+HARDWARE CHECKLIST (What to Bring)
+✅ Laptop (runs mission control)
+✅ Phone (user app)
+✅ Second phone (police simulation)
+✅ Printed "Drone Station" sign
+✅ Speaker (for alert sounds)
+✅ HDMI cable (for projector)
+✅ Power banks
+✅ Business cards with project name
+
+QUICK MISTRAL INTEGRATION (If Time Permits)
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
+tokenizer = AutoTokenizer.from_pretrained("mistralai/Mistral-7B-v0.1")
+model = AutoModelForCausalLM.from_pretrained(
+    "mistralai/Mistral-7B-v0.1",
+    load_in_4bit=True,
+    device_map="auto"
+)
+
+def check_distress_ai(situation):
+    prompt = f"""Analyze for distress:
+    {situation}
+    Answer Yes or No:
+    """
+    inputs = tokenizer(prompt, return_tensors="pt").to("cuda")
+    outputs = model.generate(**inputs, max_new_tokens=3)
+    return "Yes" in tokenizer.decode(outputs[0])
+
+JUDGING TIPS
+1. Practice demo 10+ times
+2. Have backup video if tech fails
+3. Dress professionally
+4. Speak clearly about social impact
+5. Show both code AND working demo
