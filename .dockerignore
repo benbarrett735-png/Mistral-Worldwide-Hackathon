@@ -1,0 +1,7 @@
+__pycache__
+.env
+.git
+*.pyc
+helpstral/dataset/*.jsonl
+.pytest_cache
+tests

@@ -115,6 +115,25 @@ uvicorn server:app --reload --port 8000
 
 ---
 
+
+## Deployment
+
+### Docker
+
+Build the image:
+
+```bash
+docker build -t louise .
+```
+
+Run the container (pass env from `.env`):
+
+```bash
+docker run -p 8000:8000 --env-file .env louise
+```
+
+**SITL (ArduPilot simulation):** The container does not start SITL. For full drone simulation, run SITL on the host (e.g. `./start_sitl.sh`) or in a separate container, and set `MAV_CONNECTION` (e.g. `tcp:host.docker.internal:5760`) so the server can connect to it.
+
 ## Training the models
 
 ### Generate datasets

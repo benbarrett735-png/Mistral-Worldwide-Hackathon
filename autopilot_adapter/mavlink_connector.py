@@ -34,6 +34,8 @@ try:
         ESCORT_SPEED,
         FOLLOW_DISTANCE_M,
         HUB_TO_USER_ALT,
+        SIMULATE_BATTERY,
+        SIMULATED_BATTERY_START_PCT,
         TAKEOFF_ALT,
         TRACK_ALT,
     )
@@ -44,6 +46,10 @@ except ImportError:
     HUB_TO_USER_ALT = 60
     TAKEOFF_ALT = 10
     TRACK_ALT = 25
+    SIMULATE_BATTERY = True
+    SIMULATED_BATTERY_START_PCT = 100
+
+_mission_start_time: float | None = None  # set at mission start for simulated battery
 
 
 def log(msg: str):
@@ -167,11 +173,19 @@ def get_rich_telemetry(mav) -> dict | None:
         "climb_rate": round(-pos.vz / 100.0, 1),
     }
 
-    # Battery
+    # Battery (real or simulated)
     bat = drain_and_get(mav, "SYS_STATUS")
-    if bat:
-        result["battery_pct"] = bat.battery_remaining if bat.battery_remaining >= 0 else -1
+    if bat and bat.battery_remaining >= 0:
+        result["battery_pct"] = bat.battery_remaining
         result["voltage"] = round(bat.voltage_battery / 1000.0, 1)
+    elif SIMULATE_BATTERY and _mission_start_time is not None:
+        elapsed_min = (time.time() - _mission_start_time) / 60.0
+        drain_pct_per_min = 2.5
+        result["battery_pct"] = max(0, int(SIMULATED_BATTERY_START_PCT - elapsed_min * drain_pct_per_min))
+        result["voltage"] = round(11.1 + (result["battery_pct"] / 100.0) * 2.7, 1)
+    else:
+        result["battery_pct"] = -1
+        result["voltage"] = 0
 
     # Attitude (roll/pitch/yaw)
     att = drain_and_get(mav, "ATTITUDE")
@@ -507,6 +521,7 @@ def load_waypoints_from_json(json_path: Path) -> list[dict]:
 
 
 def main():
+    global _mission_start_time
     parser = argparse.ArgumentParser(description="Louise MAVLink GUIDED-mode flight")
     parser.add_argument("--connection", default="tcp:127.0.0.1:5760")
     parser.add_argument("--mission-json", default="autopilot_adapter/output/mission.json")
@@ -528,6 +543,7 @@ def main():
     log(f"Loaded {len(waypoints)} waypoints from {json_path}")
 
     mav = connect(args.connection)
+    _mission_start_time = time.time()
     set_wpnav_speed(mav, APPROACH_RETURN_SPEED)
     arm_and_takeoff(mav, takeoff_alt)
     fly_mission(mav, waypoints)

@@ -21,6 +21,24 @@ ORS_BASE_URL = "https://api.openrouteservice.org/v2"
 PARIS_CENTER = {"lat": 48.8566, "lng": 2.3522}
 DRONE_HUB = {"lat": 48.8606, "lng": 2.3376, "label": "Louise Drone Centre — Louvre, Paris"}
 
+# Geofence — service area (lat/lng bounds). None = no check.
+# Format: {"lat_min", "lat_max", "lng_min", "lng_max"} or None
+GEOFENCE_BOUNDS = {
+    "lat_min": float(os.getenv("GEOFENCE_LAT_MIN", "48.80")),
+    "lat_max": float(os.getenv("GEOFENCE_LAT_MAX", "48.92")),
+    "lng_min": float(os.getenv("GEOFENCE_LNG_MIN", "2.22")),
+    "lng_max": float(os.getenv("GEOFENCE_LNG_MAX", "2.47")),
+}
+
+# Pricing — distance-based (e.g. €3 base + per km)
+BASE_PRICE_EUR = float(os.getenv("BASE_PRICE_EUR", "3.0"))
+PRICE_PER_KM_EUR = float(os.getenv("PRICE_PER_KM_EUR", "0.50"))
+CURRENCY = os.getenv("PRICE_CURRENCY", "EUR")
+
+# Simulated battery when real telemetry has no battery (SITL often reports -1)
+SIMULATE_BATTERY = os.getenv("SIMULATE_BATTERY", "1").strip().lower() in ("1", "true", "yes")
+SIMULATED_BATTERY_START_PCT = int(os.getenv("SIMULATED_BATTERY_START_PCT", "100"))
+
 # Flight parameters
 HUB_TO_USER_ALT = 60   # metres AGL — approach (higher, faster transit)
 TRACK_ALT = 25         # metres AGL — escort altitude (live follow)

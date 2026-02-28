@@ -282,15 +282,30 @@
     </div>
 
     <div class="section" id="visionSection" style="display:none">
-      <div class="section-title">Vision AI</div>
+      <div class="section-title">Vision AI Agents</div>
       <div class="ai-card idle" id="hsCard">
         <span class="ai-dot idle" id="hsDot"></span>
-        <div><div class="ai-label">Helpstral — Safety monitor</div><div class="ai-detail" id="hsDetail">No feed</div></div>
-        <span class="ai-value" id="hsValue">—</span>
+        <div style="flex:1">
+          <div class="ai-label">Helpstral — Safety Monitor</div>
+          <div class="ai-detail" id="hsDetail">No feed</div>
+          <div id="hsReasoning" style="font-size:0.6rem;color:#666;margin-top:0.2rem;line-height:1.4;display:none"></div>
+          <div id="hsObservations" style="font-size:0.58rem;color:#888;margin-top:0.15rem;display:none"></div>
+        </div>
+        <div style="text-align:right;min-width:65px">
+          <span class="ai-value" id="hsValue">—</span>
+          <div id="hsThreatBar" style="margin-top:0.2rem;height:4px;border-radius:2px;background:#eee;width:60px;overflow:hidden;display:none">
+            <div id="hsThreatFill" style="height:100%;background:#111;width:10%;transition:width 0.3s"></div>
+          </div>
+        </div>
       </div>
       <div class="ai-card idle" id="fsCard">
         <span class="ai-dot idle" id="fsDot"></span>
-        <div><div class="ai-label">Flystral — Autopilot</div><div class="ai-detail" id="fsDetail">No data</div></div>
+        <div style="flex:1">
+          <div class="ai-label">Flystral — Autopilot</div>
+          <div class="ai-detail" id="fsDetail">No data</div>
+          <div id="fsReasoning" style="font-size:0.6rem;color:#666;margin-top:0.2rem;line-height:1.4;display:none"></div>
+          <div id="fsScene" style="font-size:0.58rem;color:#888;margin-top:0.15rem;display:none"></div>
+        </div>
         <span class="ai-value" id="fsValue">—</span>
       </div>
     </div>
@@ -502,10 +517,12 @@
                               } else { updateDrone(msg); }
                               break;
       case 'phase':           handlePhaseChange(msg.phase); break;
+      case 'connector_died':  handleConnectorDied(); break;
       case 'complete':        handleComplete(); break;
       case 'emergency':       handleEmergency(msg); break;
       case 'sitl_log':        addLog(msg.message); appendArduPilotConsole(msg.message); break;
       case 'flystral':        handleFlystral(msg); break;
+      case 'agent_update':    handleAgentUpdate(msg); break;
       case 'pong':            break;
     }
   }
@@ -597,7 +614,10 @@
     set('telAlt', (msg.alt != null && !isNaN(msg.alt)) ? Math.round(msg.alt) : '—');
     set('telSpeed', msg.ground_speed != null ? msg.ground_speed.toFixed(1) : '—');
     set('telHeading', msg.heading != null ? Math.round(msg.heading) : '—');
-    set('telBattery', (msg.battery_pct != null && msg.battery_pct >= 0) ? msg.battery_pct : '—');
+    const pct = (msg.battery_pct != null && msg.battery_pct >= 0) ? msg.battery_pct : null;
+    set('telBattery', pct != null ? pct : '—');
+    const batEl = document.getElementById('telBattery');
+    if (batEl) batEl.style.color = (pct != null && pct <= 15) ? '#dc2626' : '';
     set('telClimb', msg.climb_rate != null ? msg.climb_rate.toFixed(1) : '—');
     set('telDistWp', msg.dist_to_wp != null ? Math.round(msg.dist_to_wp) : '—');
     set('telRoll', msg.roll != null ? msg.roll.toFixed(1) : '—');
@@ -672,6 +692,13 @@
     if (phase === 'escort') startCamera();
   }
 
+  function handleConnectorDied() {
+    addLog('Connection lost — drone returning to hub', 'warn');
+    document.getElementById('apConsole').appendChild(
+      Object.assign(document.createElement('div'), { className: 'ap-line', textContent: '> Connector exited — mission ended' })
+    );
+  }
+
   function handleComplete() {
     if (currentPhase) { phaseDone.add(currentPhase); setBadge(currentPhase,'done'); }
     addLog('Mission complete');
@@ -723,21 +750,15 @@
     const b64 = await getCameraFrameB64();
     if (!b64) return;
     try {
-      const resp = await fetch('/api/helpstral', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({image:b64}) });
+      const resp = await fetch('/api/agent-loop', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({image:b64}) });
       const data = await resp.json();
-      setVisionAI('hs', data.status === 'DISTRESS' ? 'distress' : 'safe', data.status);
-      if (data.status === 'DISTRESS') addLog('Helpstral: DISTRESS detected', 'danger');
-      runFlystralWithFrame(b64);
-    } catch {}
-  }
-
-  async function runFlystralWithFrame(b64) {
-    if (!b64) return;
-    try {
-      const resp = await fetch('/api/flystral', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({image:b64}) });
-      const data = await resp.json();
-      setVisionAI('fs', 'safe', `${data.command}|${data.param}`);
-      document.getElementById('fsDetail').textContent = `Last: ${data.command}`;
+      if (data.helpstral && data.flystral) {
+        handleAgentUpdate({ helpstral: data.helpstral, flystral: data.flystral });
+      } else {
+        const hs = data.helpstral || data;
+        setVisionAI('hs', hs.status === 'DISTRESS' ? 'distress' : 'safe', hs.status || 'SAFE');
+        if (hs.status === 'DISTRESS') addLog('Helpstral: DISTRESS detected', 'danger');
+      }
     } catch {}
   }
 
@@ -754,6 +775,44 @@
     setVisionAI('fs', 'safe', `${msg.command}|${msg.param}`);
     document.getElementById('fsDetail').textContent = `Last: ${msg.command}`;
     addLog(`Flystral: ${msg.command}|${msg.param}`, ['AVOID_LEFT','AVOID_RIGHT','HOVER','REPLAN'].includes(msg.command) ? 'warn' : 'info');
+  }
+
+  function handleAgentUpdate(msg) {
+    document.getElementById('visionSection').style.display = '';
+    const hs = msg.helpstral || {};
+    const fs = msg.flystral || {};
+    const tl = hs.threat_level || 1;
+    const hsState = tl >= 8 ? 'distress' : tl >= 5 ? 'caution' : 'safe';
+    setVisionAI('hs', hsState === 'caution' ? 'safe' : hsState, hs.status || 'SAFE');
+    if (hsState === 'caution') {
+      document.getElementById('hsCard').className = 'ai-card safe';
+      document.getElementById('hsCard').style.borderColor = '#b45309';
+      document.getElementById('hsDot').style.background = '#b45309';
+    }
+    document.getElementById('hsDetail').textContent = hs.action || '';
+    const reasonEl = document.getElementById('hsReasoning');
+    if (reasonEl && hs.reasoning) { reasonEl.textContent = hs.reasoning; reasonEl.style.display = ''; }
+    const obsEl = document.getElementById('hsObservations');
+    if (obsEl && hs.observations && hs.observations.length) {
+      obsEl.textContent = hs.observations.join(' | ');
+      obsEl.style.display = '';
+    }
+    const barEl = document.getElementById('hsThreatBar');
+    const fillEl = document.getElementById('hsThreatFill');
+    if (barEl && fillEl) {
+      barEl.style.display = '';
+      fillEl.style.width = (tl * 10) + '%';
+      fillEl.style.background = tl >= 8 ? '#dc2626' : tl >= 5 ? '#b45309' : '#111';
+    }
+    if (fs.command) {
+      setVisionAI('fs', 'safe', `${fs.command}|${fs.param || ''}`);
+      document.getElementById('fsDetail').textContent = fs.threat_context || `Last: ${fs.command}`;
+      const fsReasonEl = document.getElementById('fsReasoning');
+      if (fsReasonEl && fs.reasoning) { fsReasonEl.textContent = fs.reasoning; fsReasonEl.style.display = ''; }
+      const fsSceneEl = document.getElementById('fsScene');
+      if (fsSceneEl && fs.scene_analysis) { fsSceneEl.textContent = fs.scene_analysis; fsSceneEl.style.display = ''; }
+    }
+    if (tl >= 6) addLog(`Helpstral: threat=${tl} ${hs.status} — ${hs.pattern || ''}`, tl >= 8 ? 'danger' : 'warn');
   }
 
   function handleEmergency() {

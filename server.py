@@ -24,22 +24,40 @@ from pydantic import BaseModel
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
+    BASE_PRICE_EUR,
+    CURRENCY,
     DRONE_HUB,
     FLYSTRAL_MODEL_ID,
+    GEOFENCE_BOUNDS,
     HELPSTRAL_MODEL_ID,
     MAV_CONNECTION,
     MISTRAL_API_KEY,
     ORS_API_KEY,
     ORS_BASE_URL,
     OSRM_BASE_URL,
+    PRICE_PER_KM_EUR,
     SITL_HOST,
     SITL_PORT,
+    TRACK_ALT,
     _env_warnings,
 )
 from autopilot_adapter.waypoint_generator import generate_from_osrm, generate_all, save_mission, haversine as wp_haversine
-from flystral.command_parser import apply_command, parse_to_waypoint_update
+from flystral.command_parser import VALID_COMMANDS as FLYSTRAL_VALID_COMMANDS, parse_to_waypoint_update
+from helpstral.agent import run_helpstral_agent, get_location_context, DEFAULT_ASSESSMENT as HELPSTRAL_DEFAULT
+from flystral.agent import run_flystral_agent, DEFAULT_RESULT as FLYSTRAL_DEFAULT
 
 app = FastAPI(title="Louise API")
+
+
+def _log_event(event: str, **kwargs):
+    """Structured log line for observability (event=value key=value)."""
+    parts = [f"event={event}"]
+    for k, v in kwargs.items():
+        if v is None:
+            continue
+        parts.append(f"{k}={v!r}" if " " in str(v) else f"{k}={v}")
+    print(" ".join(parts), flush=True)
+
 
 _env_warnings()
 
@@ -89,6 +107,8 @@ class ConnectionManager:
             self.sim_task.cancel()
 
         async def stream_connector():
+                global _mission_in_progress
+                _mission_in_progress = True
                 # Kill MAVProxy so connector can connect to TCP 5760 directly
                 # SITL stays running with warm EKF
                 kill_proxy = await asyncio.create_subprocess_exec(
@@ -135,6 +155,8 @@ class ConnectionManager:
                             event = json.loads(text)
                             event["source"] = "ardupilot"
                             last_event = event
+                            if event.get("type") == "position":
+                                _latest_telemetry.update(event)
                             await self.broadcast(event)
                         except json.JSONDecodeError:
                             pass
@@ -144,7 +166,9 @@ class ConnectionManager:
                     raise
                 finally:
                     manager.connector_proc = None
+                    _mission_in_progress = False
                     if last_event and last_event.get("type") != "complete":
+                        await self.broadcast({"type": "connector_died", "source": "ardupilot"})
                         await self.broadcast({"type": "complete", "source": "ardupilot"})
 
         self.sim_task = asyncio.create_task(stream_connector())
@@ -152,6 +176,108 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 _current_mission: dict | None = None
+_mission_in_progress: bool = False  # True while connector subprocess is running
+
+# ── Agent state (multi-agent loop) ─────────────────────────────────────────────
+_assessment_history: list[dict] = []  # sliding window of Helpstral assessments
+_latest_helpstral: dict = dict(HELPSTRAL_DEFAULT)
+_latest_flystral: dict = dict(FLYSTRAL_DEFAULT)
+_latest_telemetry: dict = {}
+_latest_user_position: dict = {}
+_ASSESSMENT_WINDOW = 10
+
+
+async def agent_loop(frame_b64: str) -> dict:
+    """
+    Core multi-agent loop: Helpstral assesses → Flystral decides → execute + broadcast.
+    Called every time a frame is available (from partner camera or test-frame).
+    """
+    global _latest_helpstral, _latest_flystral
+
+    user_pos = _latest_user_position
+    location_ctx = get_location_context(
+        user_pos.get("lat", DRONE_HUB["lat"]),
+        user_pos.get("lng", DRONE_HUB["lng"]),
+    ) if user_pos else None
+
+    mission = _current_mission.get("mission") if _current_mission else None
+    route_progress = None
+    if mission and _latest_telemetry.get("waypoint_index") is not None:
+        total = mission["stats"].get("total_waypoints", 1)
+        route_progress = _latest_telemetry.get("waypoint_index", 0) / max(1, total)
+
+    helpstral_result = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: run_helpstral_agent(
+            image_b64=frame_b64,
+            recent_assessments=_assessment_history[-5:],
+            location=location_ctx,
+            route_progress=route_progress,
+        ),
+    )
+    _latest_helpstral = helpstral_result
+    _assessment_history.append(helpstral_result)
+    while len(_assessment_history) > _ASSESSMENT_WINDOW:
+        _assessment_history.pop(0)
+
+    flystral_result = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: run_flystral_agent(
+            image_b64=frame_b64,
+            threat_assessment=helpstral_result,
+            telemetry=_latest_telemetry,
+            route_progress=route_progress,
+        ),
+    )
+    _latest_flystral = flystral_result
+
+    command = flystral_result.get("command", "FOLLOW")
+    param = str(flystral_result.get("param", "0.5"))
+    alt_adjust = flystral_result.get("altitude_adjust", 0)
+
+    if command in FLYSTRAL_VALID_COMMANDS:
+        ref = {"lat": 0.0, "lng": 0.0, "alt": 0.0}
+        updated = parse_to_waypoint_update(command, param, ref)
+        dlat = updated.get("lat", 0.0) - ref["lat"]
+        dlng = updated.get("lng", 0.0) - ref["lng"]
+        dalt = updated.get("alt", 0.0) - ref["alt"] + alt_adjust
+        await _send_to_connector({"type": "flystral_offset", "dlat": dlat, "dlng": dlng, "dalt": dalt})
+
+    await manager.broadcast({
+        "type": "agent_update",
+        "helpstral": helpstral_result,
+        "flystral": flystral_result,
+    })
+
+    recent_high_threats = [
+        a for a in _assessment_history[-3:]
+        if a.get("threat_level", 1) >= 6
+    ]
+    if len(recent_high_threats) >= 3:
+        _log_event("auto_escalation", threat_level=helpstral_result.get("threat_level"),
+                   pattern=helpstral_result.get("pattern"))
+        await manager.broadcast({
+            "type": "emergency",
+            "origin": "helpstral_auto_escalation",
+            "assessment": helpstral_result,
+        })
+
+    return {"helpstral": helpstral_result, "flystral": flystral_result}
+
+
+def _in_bounds(lat: float, lng: float) -> bool:
+    """Check if lat/lng is within GEOFENCE_BOUNDS."""
+    b = GEOFENCE_BOUNDS
+    return b["lat_min"] <= lat <= b["lat_max"] and b["lng_min"] <= lng <= b["lng_max"]
+
+
+def _clamp_position(lat: float, lng: float) -> tuple[float, float]:
+    """Clamp lat/lng to geofence bounds so connector never gets invalid targets."""
+    b = GEOFENCE_BOUNDS
+    return (
+        max(b["lat_min"], min(b["lat_max"], lat)),
+        max(b["lng_min"], min(b["lng_max"], lng)),
+    )
 
 
 async def _send_to_connector(obj: dict) -> bool:
@@ -175,15 +301,25 @@ async def websocket_endpoint(ws: WebSocket):
     try:
         while True:
             data = await ws.receive_text()
-            msg = json.loads(data)
+            try:
+                msg = json.loads(data)
+            except (json.JSONDecodeError, TypeError):
+                await ws.send_json({"type": "error", "message": "Invalid JSON"})
+                continue
+            if not isinstance(msg, dict):
+                continue
             if msg.get("type") == "ping":
                 await ws.send_json({"type": "pong"})
             elif msg.get("type") == "user_position" and isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lng"), (int, float)):
-                await _send_to_connector({"type": "user_position", "lat": msg["lat"], "lng": msg["lng"]})
+                lat, lng = _clamp_position(float(msg["lat"]), float(msg["lng"]))
+                _latest_user_position.update({"lat": lat, "lng": lng})
+                await _send_to_connector({"type": "user_position", "lat": lat, "lng": lng})
             elif msg.get("type") == "user_arrived":
                 await _send_to_connector({"type": "phase", "phase": "return"})
             elif msg.get("type") == "emergency":
+                _log_event("emergency", origin=msg.get("origin"))
                 await manager.broadcast({"type": "emergency", "origin": msg.get("origin")})
+            # unknown types ignored (no disconnect)
     except WebSocketDisconnect:
         manager.disconnect(ws)
 
@@ -206,6 +342,37 @@ class HelpstralRequest(BaseModel):
 
 class FlystralRequest(BaseModel):
     image: str  # base64-encoded image
+
+
+@app.get("/api/config")
+async def get_config():
+    """Public config for clients: hub, service area, pricing, track altitude. No secrets."""
+    return {
+        "hub": DRONE_HUB,
+        "bounds": GEOFENCE_BOUNDS,
+        "track_alt_m": TRACK_ALT,
+        "base_price_eur": BASE_PRICE_EUR,
+        "price_per_km_eur": PRICE_PER_KM_EUR,
+        "currency": CURRENCY,
+    }
+
+
+@app.post("/api/estimate")
+async def get_estimate(req: RouteRequest):
+    """Return distance (km) and price estimate for a route. Used by user app before ordering."""
+    lat1, lng1 = req.origin
+    lat2, lng2 = req.destination
+    if not _in_bounds(lat1, lng1) or not _in_bounds(lat2, lng2):
+        raise HTTPException(status_code=400, detail="Origin or destination outside service area.")
+    distance_m = wp_haversine(lat1, lng1, lat2, lng2)
+    distance_km = round(distance_m / 1000.0, 2)
+    estimate_eur = round(BASE_PRICE_EUR + distance_km * PRICE_PER_KM_EUR, 2)
+    return {
+        "distance_km": distance_km,
+        "distance_m": int(distance_m),
+        "estimate_eur": estimate_eur,
+        "currency": CURRENCY,
+    }
 
 
 # Minimal 1x1 grey JPEG for test/placeholder feed (e.g. when no real camera)
@@ -235,9 +402,12 @@ async def get_route(req: RouteRequest):
     """
     Get a walking route via OSRM (free), then ORS if key set, then straight-line fallback.
     Returns coords as [[lng, lat], ...]. Always returns coords so the user can proceed.
+    If origin or destination is outside geofence, returns 400.
     """
     lat1, lng1 = req.origin
     lat2, lng2 = req.destination
+    if not _in_bounds(lat1, lng1) or not _in_bounds(lat2, lng2):
+        raise HTTPException(status_code=400, detail="Origin or destination is outside the service area.")
 
     # Primary: OSRM public server (1 req/sec limit; use User-Agent)
     try:
@@ -301,9 +471,16 @@ async def order_drone(req: OrderRequest):
     Generate ArduPilot waypoint files for all 3 phases and broadcast to Mission Control.
     The route from the user app (OSRM walking polyline) is used directly as escort waypoints
     so the drone follows the exact walking route, not a straight line.
+    Returns 409 if a mission is already in progress (connector running).
     """
     global _current_mission
+    if _mission_in_progress:
+        raise HTTPException(status_code=409, detail="A mission is already in progress. Wait for it to finish or reconnect.")
     hub = (DRONE_HUB["lat"], DRONE_HUB["lng"])
+    lat1, lng1 = req.origin
+    lat2, lng2 = req.destination
+    if not _in_bounds(lat1, lng1) or not _in_bounds(lat2, lng2):
+        raise HTTPException(status_code=400, detail="Origin or destination is outside the service area. Please choose locations within the supported region.")
 
     route_coords = req.route
     if route_coords and len(route_coords) >= 2:
@@ -370,6 +547,7 @@ async def order_drone(req: OrderRequest):
     }
 
     await manager.broadcast(broadcast_msg)
+    _log_event("mission_planned", waypoints=mission["stats"].get("total_waypoints"), hub_lat=DRONE_HUB["lat"])
 
     return {
         "status": "planned",
@@ -431,6 +609,7 @@ async def start_mission_endpoint():
 
     mission = _current_mission["mission"]
     total = len(mission["approach"]) + len(mission["escort"]) + len(mission["return"])
+    _log_event("mission_start", waypoints=total)
     return {"status": "started", "source": "ardupilot", "waypoints": total}
 
 
@@ -487,117 +666,72 @@ async def _wait_for_sitl_ready(timeout: float = 90) -> bool:
 @app.post("/api/helpstral")
 async def helpstral(req: HelpstralRequest):
     """
-    Run Helpstral distress detection on a base64 image.
-    Returns {"status": "SAFE" | "DISTRESS"}.
-    Falls back to SAFE if no API key set.
+    Run Helpstral structured safety assessment on a base64 image.
+    Returns full structured assessment: threat_level, status, observations, pattern, reasoning, action.
     """
-    if not MISTRAL_API_KEY:
-        return {"status": "SAFE", "source": "no_key_fallback"}
-
-    try:
-        from mistralai import Mistral
-        client = Mistral(api_key=MISTRAL_API_KEY)
-
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "You are Louise Vision, a safety AI watching over a person walking alone at night. "
-                            "Analyze this image from their surroundings or camera. "
-                            "Respond with ONLY one word: DISTRESS (if you see signs of danger, threat, "
-                            "struggle, aggression, or the person appears in trouble) or SAFE (if everything appears normal). "
-                            "One word only."
-                        ),
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": f"data:image/jpeg;base64,{req.image}",
-                    },
-                ],
-            }
-        ]
-
-        response = client.chat.complete(
-            model=HELPSTRAL_MODEL_ID,
-            messages=messages,
-            max_tokens=10,
-        )
-        raw = response.choices[0].message.content.strip().upper()
-        status = "DISTRESS" if "DISTRESS" in raw else "SAFE"
-        return {"status": status, "raw": raw}
-
-    except Exception as e:
-        return {"status": "SAFE", "error": str(e)}
+    result = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: run_helpstral_agent(
+            image_b64=req.image,
+            recent_assessments=_assessment_history[-5:],
+            location=get_location_context(
+                _latest_user_position.get("lat", DRONE_HUB["lat"]),
+                _latest_user_position.get("lng", DRONE_HUB["lng"]),
+            ),
+        ),
+    )
+    global _latest_helpstral
+    _latest_helpstral = result
+    _assessment_history.append(result)
+    while len(_assessment_history) > _ASSESSMENT_WINDOW:
+        _assessment_history.pop(0)
+    return result
 
 
 # ── /api/flystral ─────────────────────────────────────────────────────────────
 @app.post("/api/flystral")
 async def flystral(req: FlystralRequest):
     """
-    Run Flystral vision-to-command on a base64 drone camera image.
-    Returns {"command": "FOLLOW|0.5"} etc.
+    Run Flystral structured flight command on a base64 drone camera image.
+    Uses latest Helpstral assessment for threat-aware flight decisions.
+    Returns full structured command: command, param, reasoning, altitude_adjust, etc.
     """
-    if not MISTRAL_API_KEY:
-        return {"command": "FOLLOW", "param": "0.5", "source": "no_key_fallback"}
+    result = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: run_flystral_agent(
+            image_b64=req.image,
+            threat_assessment=_latest_helpstral,
+            telemetry=_latest_telemetry,
+        ),
+    )
+    global _latest_flystral
+    _latest_flystral = result
 
-    try:
-        from mistralai import Mistral
-        client = Mistral(api_key=MISTRAL_API_KEY)
+    command = result.get("command", "FOLLOW")
+    param = str(result.get("param", "0.5"))
+    alt_adjust = result.get("altitude_adjust", 0)
 
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {
-                        "type": "text",
-                        "text": (
-                            "You are Louise Pilot, an AI autopilot for a safety escort drone. "
-                            "Analyze this drone camera image and decide the next flight action. "
-                            "Respond with ONLY one of these commands:\n"
-                            "FOLLOW|<speed 0.1-1.0> - Follow the person ahead\n"
-                            "AVOID_LEFT|<distance> - Obstacle on right, move left\n"
-                            "AVOID_RIGHT|<distance> - Obstacle on left, move right\n"
-                            "CLIMB|<meters> - Obstacle ahead, climb over\n"
-                            "HOVER|<seconds> - Stop and hover briefly\n"
-                            "REPLAN|0 - User has deviated, replan route\n"
-                            "Example: FOLLOW|0.5\n"
-                            "Respond with the command only, nothing else."
-                        ),
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": f"data:image/jpeg;base64,{req.image}",
-                    },
-                ],
-            }
-        ]
+    await manager.broadcast({"type": "flystral", "command": command, "param": param})
 
-        response = client.chat.complete(
-            model=FLYSTRAL_MODEL_ID,
-            messages=messages,
-            max_tokens=20,
-        )
-        raw = response.choices[0].message.content.strip()
-        parts = raw.split("|")
-        command = parts[0].upper() if parts else "FOLLOW"
-        param = parts[1] if len(parts) > 1 else "0.5"
-
-        await manager.broadcast({"type": "flystral", "command": command, "param": param})
-
+    if command in FLYSTRAL_VALID_COMMANDS:
         ref = {"lat": 0.0, "lng": 0.0, "alt": 0.0}
         updated = parse_to_waypoint_update(command, param, ref)
         dlat = updated.get("lat", 0.0) - ref["lat"]
         dlng = updated.get("lng", 0.0) - ref["lng"]
-        dalt = updated.get("alt", 0.0) - ref["alt"]
+        dalt = updated.get("alt", 0.0) - ref["alt"] + alt_adjust
         await _send_to_connector({"type": "flystral_offset", "dlat": dlat, "dlng": dlng, "dalt": dalt})
 
-        return {"command": command, "param": param, "raw": raw}
+    return result
 
-    except Exception as e:
-        return {"command": "FOLLOW", "param": "0.5", "error": str(e)}
+
+# ── /api/agent-loop — full multi-agent cycle ──────────────────────────────────
+@app.post("/api/agent-loop")
+async def run_agent_loop(req: HelpstralRequest):
+    """
+    Run the full multi-agent loop: Helpstral → Flystral → execute + broadcast.
+    Returns both agent results. Used by partner app for coordinated AI cycle.
+    """
+    return await agent_loop(req.image)
 
 
 # ── ArduPilot SITL control (for Mission Control UI) ─────────────────────────────
@@ -656,12 +790,23 @@ async def sitl_status():
 # ── Health check ───────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
+    out_dir = Path("autopilot_adapter/output")
+    output_writable = False
+    try:
+        out_dir.mkdir(parents=True, exist_ok=True)
+        probe = out_dir / ".health_probe"
+        probe.write_text("")
+        probe.unlink(missing_ok=True)
+        output_writable = True
+    except Exception:
+        pass
     return {
         "status": "ok",
         "mistral_key": bool(MISTRAL_API_KEY),
         "ors_key": bool(ORS_API_KEY),
         "helpstral_model": HELPSTRAL_MODEL_ID,
         "flystral_model": FLYSTRAL_MODEL_ID,
+        "output_writable": output_writable,
     }
 
 
