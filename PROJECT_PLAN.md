@@ -1,4 +1,4 @@
-# Helpstroll & Flystroll — Mistral Hackathon Project Plan
+# Helpstral & Flystral — Mistral Hackathon Project Plan
 
 ## Overview
 
@@ -8,8 +8,8 @@
 
 | Model | Nickname | Role |
 |-------|----------|------|
-| **Model 1** | **Helpstroll** | Vision → distress detection. Watches user’s camera feed, escalates when distress detected. |
-| **Model 2** | **Flystroll** | Pre-flight: 3D map + user route → generates drone flight path. In-flight: cameras + lidar → obstacle avoidance + re-plan if user changes direction. |
+| **Model 1** | **Helpstral** | Vision → distress detection. Watches user’s camera feed, escalates when distress detected. |
+| **Model 2** | **Flystral** | Pre-flight: 3D map + user route → generates drone flight path. In-flight: cameras + lidar → obstacle avoidance + re-plan if user changes direction. |
 
 ---
 
@@ -50,14 +50,14 @@ DEFAULT_ZOOM = 15
 
 | Component | Feasible in 48h? | Notes |
 |-----------|------------------|-------|
-| **Helpstroll** | ✅ Yes | Vision model fine-tuned on distress/no-distress images (~100–500 examples). |
-| **Flystroll** | ⚠️ Phased | Full vision→autopilot is hard; start with a simpler v1 (see below). |
+| **Helpstral** | ✅ Yes | Vision model fine-tuned on distress/no-distress images (~100–500 examples). |
+| **Flystral** | ⚠️ Phased | Full vision→autopilot is hard; start with a simpler v1 (see below). |
 | **Web interfaces** | ✅ Yes | User app + partner dashboard. |
 | **Login** | ❌ Skip for demo | No auth in 48h; demo mode only. |
 
 ---
 
-## Helpstroll — Distress Detection
+## Helpstral — Distress Detection
 
 ### Idea
 - Input: image from user’s phone camera.
@@ -78,12 +78,12 @@ DEFAULT_ZOOM = 15
 
 ---
 
-## Flystroll — Full Architecture
+## Flystral — Full Architecture
 
 ### Flow
 
 1. **User pre-inputs walking route** on the map (Paris streets).
-2. **Flystroll has 3D city maps** (Paris) → generates drone flight path (corridor above the route).
+2. **Flystral has 3D city maps** (Paris) → generates drone flight path (corridor above the route).
 3. **Drone flies** the planned path.
 4. **In-flight:** Onboard cameras + lidar → obstacle avoidance + re-plan if user changes direction.
 
@@ -112,13 +112,13 @@ DEFAULT_ZOOM = 15
 |-----------|-------|-------|
 | 3D map + user route input | ✅ | Paris, user draws route on map |
 | Flight path generation | ✅ | Offset route + basic building avoidance |
-| Camera → commands | ⚠️ | Flystroll v1: semantic labels, smaller dataset |
+| Camera → commands | ⚠️ | Flystral v1: semantic labels, smaller dataset |
 | Lidar | 🔲 | Simulated / post-hackathon |
 | Re-plan on route change | ⚠️ | "User deviated → recalc path" |
 
 ---
 
-## Flystroll — Vision → Autopilot (Implementation Detail)
+## Flystral — Vision → Autopilot (Implementation Detail)
 
 ### What “talk to autopilot” means
 - Autopilot expects low-level commands: throttle, yaw, pitch, roll, or waypoints.
@@ -134,14 +134,14 @@ DEFAULT_ZOOM = 15
 
 **Recommended for hackathon: B (or A as fallback).**
 
-### Flystroll v1 (48h)
+### Flystral v1 (48h)
 
 1. **Model:** Ministral 3B (vision) or similar vision-language model.
 2. **Input:** Single front camera image (or stitched 360 view later).
 3. **Output:** Structured string, e.g. `FOLLOW|0.5` or `HOVER|2.0` or `AVOID_LEFT|0.3`.
 4. **Mapping layer:** Your code parses that string and sends MAVLink / autopilot commands.
 
-### Flystroll v2 (post-hackathon)
+### Flystral v2 (post-hackathon)
 
 - Multi-camera (360) input.
 - Lidar integration.
@@ -184,15 +184,15 @@ Mistral Hackathon/
 │
 ├── app/
 │   ├── user/                 # User app (phone) — login, Walk me home, route, Order drone
-│   ├── partner/              # Mission control (laptop) — waypoints, camera, Helpstroll
+│   ├── partner/              # Mission control (laptop) — waypoints, camera, Helpstral
 │   └── shared/               # API, routing, waypoint generation
 │
-├── helpstroll/               # Distress detection model
+├── helpstral/               # Distress detection model
 │   ├── data/                 # Images: distress/ vs safe/
 │   ├── train_colab.ipynb     # Fine-tuning notebook
 │   └── infer.py              # Load model, run inference
 │
-├── flystroll/                # Vision → autopilot model
+├── flystral/                # Vision → autopilot model
 │   ├── data/                 # (image, command) pairs
 │   ├── train_colab.ipynb     # Fine-tuning notebook
 │   └── command_parser.py     # Text → autopilot commands
@@ -207,18 +207,18 @@ Mistral Hackathon/
 
 ### Phase 1: Foundation (Sat AM)
 1. Set up repo and folder structure.
-2. Create Helpstroll dataset (scrape/source 100+ distress/safe images).
-3. Start Helpstroll fine-tuning in Colab.
+2. Create Helpstral dataset (scrape/source 100+ distress/safe images).
+3. Start Helpstral fine-tuning in Colab.
 
-### Phase 2: Helpstroll + App Core (Sat PM)
-4. Finish Helpstroll training; export model.
+### Phase 2: Helpstral + App Core (Sat PM)
+4. Finish Helpstral training; export model.
 5. Build user app skeleton: Summon, Distress, map (simulated).
-6. Integrate Helpstroll for image-based distress check.
+6. Integrate Helpstral for image-based distress check.
 
-### Phase 3: Flystroll v1 (Sun AM)
+### Phase 3: Flystral v1 (Sun AM)
 7. User route input UI (draw path on Paris map).
 8. Flight path generation: offset route, output waypoints.
-9. Create Flystroll dataset: (image, command) pairs (e.g. 50–100).
+9. Create Flystral dataset: (image, command) pairs (e.g. 50–100).
 10. Fine-tune Ministral 3 vision → obstacle/command output.
 11. Command parser → autopilot (or mock for demo).
 
@@ -247,6 +247,6 @@ Mistral Hackathon/
 ## Next Steps
 
 1. Confirm autopilot stack (RGPilot / ArduPilot / other).
-2. Start collecting/generating Helpstroll images.
-3. Create Colab notebook for Helpstroll fine-tuning.
+2. Start collecting/generating Helpstral images.
+3. Create Colab notebook for Helpstral fine-tuning.
 4. Set up app skeleton (Next.js or similar).

@@ -2,467 +2,797 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Louise</title>
-  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="preconnect" href="https://unpkg.com" crossorigin>
   <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://a.basemaps.cartocdn.com" crossorigin>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"></noscript>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Inter', system-ui, -apple-system, sans-serif; background: #fff; color: #1a1a1a; height: 100dvh; display: flex; flex-direction: column; }
-
-    #map { flex: 1; min-height: 0; }
-
-    .panel {
-      padding: 1.25rem 1.25rem 1.5rem;
-      background: #fff;
-      border-top: 1px solid #e5e7eb;
-      flex-shrink: 0;
-      max-height: 50vh;
-      overflow-y: auto;
-      box-shadow: 0 -4px 24px rgba(0,0,0,0.06);
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      font-family: 'Inter', system-ui, -apple-system, sans-serif;
+      background: #fff; color: #111;
     }
 
-    .logo {
-      display: flex; align-items: center; gap: 0.5rem;
-      margin-bottom: 0.6rem;
-    }
-    .logo-icon {
-      width: 28px; height: 28px; border-radius: 8px;
-      background: linear-gradient(135deg, #2563eb, #7c3aed);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 14px; color: #fff;
-    }
-    .logo-text { font-size: 1.15rem; font-weight: 700; color: #1a1a1a; letter-spacing: -0.02em; }
+    #map { position: absolute; inset: 0; z-index: 0; }
 
-    .status { font-size: 0.82rem; color: #6b7280; margin-bottom: 0.75rem; min-height: 1rem; }
+    .top-bar {
+      position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
+      padding: max(12px, env(safe-area-inset-top)) 16px 0;
+    }
+    .search-card {
+      background: #fff; border-radius: 28px;
+      box-shadow: 0 2px 12px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.04);
+      display: flex; align-items: center; padding: 0 16px; height: 50px;
+      gap: 10px; transition: box-shadow 0.2s;
+    }
+    .search-card:focus-within { box-shadow: 0 4px 20px rgba(0,0,0,0.14), 0 0 0 2px #111; }
+    .search-icon { color: #999; font-size: 16px; flex-shrink: 0; }
+    .search-icon svg { width: 18px; height: 18px; stroke: #999; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .search-card input {
+      border: none; outline: none; flex: 1; font-size: 15px;
+      font-family: inherit; color: #111; background: transparent; min-width: 0;
+    }
+    .search-card input::placeholder { color: #aaa; }
+    .search-clear {
+      display: none; background: none; border: none; cursor: pointer;
+      font-size: 18px; color: #999; padding: 4px;
+    }
+    .search-results {
+      display: none; background: #fff; border-radius: 14px; margin-top: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+      max-height: 240px; overflow-y: auto;
+    }
+    .search-result {
+      padding: 12px 16px; cursor: pointer; font-size: 14px;
+      color: #333; border-bottom: 1px solid #f3f3f3;
+      display: flex; align-items: flex-start; gap: 10px;
+    }
+    .search-result:last-child { border-bottom: none; }
+    .search-result:active { background: #f5f5f5; }
+    .search-result .sr-icon { color: #999; font-size: 14px; margin-top: 1px; flex-shrink: 0; }
+    .search-result .sr-name { font-weight: 500; }
+    .search-result .sr-addr { font-size: 12px; color: #999; margin-top: 2px; }
+    .search-status {
+      padding: 14px 16px; font-size: 14px; color: #666;
+      border-bottom: 1px solid #f3f3f3;
+    }
 
-    /* Inputs */
-    .input-group { margin: 0.5rem 0; position: relative; }
-    .input-group label {
-      display: block; font-size: 0.7rem; font-weight: 600;
-      text-transform: uppercase; letter-spacing: 0.06em;
-      color: #9ca3af; margin-bottom: 0.25rem;
+    .bottom-sheet {
+      position: absolute; bottom: 0; left: 0; right: 0; z-index: 1000;
+      background: #fff; border-radius: 18px 18px 0 0;
+      box-shadow: 0 -2px 20px rgba(0,0,0,0.06);
+      padding: 0 20px;
+      padding-bottom: max(20px, env(safe-area-inset-bottom));
+      transition: transform 0.3s ease;
+      max-height: 60vh; overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
     }
-    .input-group input {
-      width: 100%; padding: 0.7rem 0.85rem; font-size: 0.92rem;
-      border: 1.5px solid #e5e7eb; border-radius: 10px;
-      background: #f9fafb; color: #1a1a1a; outline: none;
-      font-family: inherit; transition: border-color 0.2s;
+    .sheet-handle {
+      width: 32px; height: 4px; border-radius: 2px;
+      background: #ddd; margin: 10px auto 0;
     }
-    .input-group input:focus { border-color: #2563eb; background: #fff; }
-    .input-group input::placeholder { color: #c5c8ce; }
+    .sheet-content { padding: 14px 0 4px; }
 
-    .location-row {
-      display: flex; align-items: center; gap: 0.5rem;
-      background: #f0f7ff; border: 1.5px solid #dbeafe;
-      border-radius: 10px; padding: 0.6rem 0.85rem; margin: 0.5rem 0;
-      font-size: 0.85rem; color: #2563eb;
+    .loc-row {
+      display: flex; align-items: center; gap: 12px;
+      padding: 10px 0; border-bottom: 1px solid #f3f3f3;
     }
-    .location-row .dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: #2563eb; flex-shrink: 0;
-    }
-    .location-row .coords { flex: 1; font-weight: 500; }
-
-    /* Buttons */
-    button {
-      display: block; width: 100%; padding: 0.85rem 1rem;
-      margin: 0.5rem 0; font-size: 0.95rem; font-weight: 600;
-      border: none; border-radius: 12px; cursor: pointer;
-      font-family: inherit; transition: all 0.15s;
-    }
-    button:disabled { opacity: 0.35; cursor: not-allowed; }
-    button:active:not(:disabled) { transform: scale(0.98); }
-
-    .btn-primary { background: #2563eb; color: #fff; }
-    .btn-primary:hover:not(:disabled) { background: #1d4ed8; }
-    .btn-order { background: linear-gradient(135deg, #2563eb, #7c3aed); color: #fff; font-size: 1rem; }
-    .btn-order:hover:not(:disabled) { opacity: 0.92; }
-    .btn-danger { background: #dc2626; color: #fff; font-size: 1.05rem; letter-spacing: 0.02em; }
-    .btn-safe { background: #16a34a; color: #fff; }
-    .btn-outline {
-      background: transparent; color: #6b7280;
-      border: 1.5px solid #e5e7eb; font-weight: 500; font-size: 0.85rem;
-    }
-    .btn-outline:hover { border-color: #d1d5db; background: #f9fafb; }
-    .btn-small { padding: 0.6rem 0.8rem; font-size: 0.85rem; }
-
-    /* Route card */
-    .route-card {
-      background: #f9fafb; border: 1px solid #e5e7eb;
-      border-radius: 10px; padding: 0.8rem; margin: 0.5rem 0;
-      font-size: 0.82rem; color: #6b7280; line-height: 1.6;
-    }
-    .route-card strong { color: #1a1a1a; }
-
-    /* Drone status */
-    .drone-status {
-      display: flex; align-items: center; gap: 0.6rem;
-      padding: 0.7rem 0.85rem; margin: 0.5rem 0;
-      background: #f0fdf4; border: 1px solid #bbf7d0;
-      border-radius: 10px; font-size: 0.85rem; color: #15803d;
-    }
-    .drone-status .pulse-dot {
+    .loc-row:last-child { border-bottom: none; }
+    .loc-dot {
       width: 10px; height: 10px; border-radius: 50%;
-      background: #22c55e; animation: pulse 1.5s infinite;
+      flex-shrink: 0; border: 2px solid;
     }
-    @keyframes pulse { 50% { opacity: 0.5; } }
-
-    /* Distress panel */
-    .distress-panel {
-      background: #fef2f2; border: 1.5px solid #fecaca;
-      border-radius: 12px; padding: 1rem; margin: 0.5rem 0;
-      text-align: center;
-    }
-    .distress-panel p { font-size: 0.85rem; color: #991b1b; margin-bottom: 0.5rem; }
-    .countdown {
-      font-size: 3rem; font-weight: 800; color: #dc2626;
-      padding: 0.3rem 0; line-height: 1;
+    .loc-dot.origin { border-color: #111; background: #e5e5e5; }
+    .loc-dot.dest { border-color: #555; background: #f0f0f0; }
+    .loc-label { font-size: 14px; color: #333; flex: 1; min-width: 0; }
+    .loc-label.placeholder { color: #aaa; }
+    .loc-change {
+      font-size: 13px; color: #111; font-weight: 500; cursor: pointer;
+      background: none; border: none; padding: 4px 8px; flex-shrink: 0;
+      text-decoration: underline; text-underline-offset: 2px;
     }
 
-    /* Map marker popups */
-    .leaflet-popup-content-wrapper { border-radius: 10px; }
+    .route-info {
+      background: #fafafa; border-radius: 10px; padding: 12px 14px;
+      margin: 10px 0; font-size: 13px; color: #666; line-height: 1.6;
+      border: 1px solid #eee;
+    }
+    .route-info strong { color: #111; }
+
+    .eta-card {
+      background: #fafafa; border: 1px solid #eee;
+      border-radius: 10px; padding: 16px; margin: 10px 0; text-align: center;
+    }
+    .eta-time {
+      font-size: 26px; font-weight: 800; color: #111;
+      letter-spacing: -0.02em;
+    }
+    .eta-label { font-size: 12px; color: #888; margin-top: 4px; }
+
+    .btn {
+      display: block; width: 100%; padding: 14px; margin: 6px 0;
+      font-size: 15px; font-weight: 600; border: none; border-radius: 12px;
+      cursor: pointer; font-family: inherit; transition: all 0.15s;
+      min-height: 48px; -webkit-tap-highlight-color: transparent;
+    }
+    .btn:disabled { opacity: 0.4; cursor: not-allowed; }
+    .btn:active:not(:disabled) { transform: scale(0.98); }
+    .btn-primary { background: #111; color: #fff; }
+    .btn-go { background: #111; color: #fff; font-size: 16px; }
+    .btn-danger { background: #dc2626; color: #fff; }
+    .btn-outline {
+      background: #fff; color: #666;
+      border: 1px solid #ddd; font-weight: 500;
+    }
+
+    .drone-card {
+      display: flex; align-items: center; gap: 12px;
+      padding: 12px 14px; margin: 8px 0;
+      background: #fafafa; border: 1px solid #eee;
+      border-radius: 10px;
+    }
+    .drone-card .pulse-dot {
+      width: 8px; height: 8px; border-radius: 50%;
+      background: #111; flex-shrink: 0;
+      animation: pulse 1.5s infinite;
+    }
+    .drone-card .drone-text { flex: 1; font-size: 13px; color: #111; font-weight: 500; }
+    .drone-card .drone-sub { font-size: 12px; color: #888; margin-top: 2px; font-weight: 400; }
+    .drone-card .live-badge {
+      font-size: 10px; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.06em; color: #111; background: #eee;
+      padding: 2px 7px; border-radius: 4px; display: none;
+    }
+    @keyframes pulse { 50% { opacity: 0.4; } }
+    @keyframes dronePulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.5); } 50% { opacity: 0.7; box-shadow: 0 0 0 5px rgba(34,197,94,0); } }
+
+    .distress-box {
+      background: #fff; border: 1px solid #dc2626;
+      border-radius: 10px; padding: 20px; text-align: center;
+    }
+    .distress-box p { font-size: 13px; color: #666; margin-bottom: 10px; }
+    .countdown { font-size: 44px; font-weight: 800; color: #dc2626; line-height: 1; }
+
+    .locate-btn {
+      position: absolute; bottom: 0; right: 16px; z-index: 999;
+      width: 42px; height: 42px; border-radius: 50%;
+      background: #fff; border: none; cursor: pointer;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+      display: flex; align-items: center; justify-content: center;
+      transition: transform 0.3s;
+    }
+    .locate-btn svg { width: 20px; height: 20px; stroke: #111; fill: none; stroke-width: 2; }
+    .locate-btn:active { transform: scale(0.92); }
+
+    .leaflet-control-attribution { display: none !important; }
   </style>
 </head>
 <body>
   <div id="map"></div>
-  <div class="panel" id="panel">
-    <div class="logo">
-      <div class="logo-icon">L</div>
-      <span class="logo-text">Louise</span>
+
+  <button class="locate-btn" id="btnLocate" title="My location">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>
+  </button>
+
+  <div class="top-bar" id="topBar">
+    <div class="search-card" id="searchCard">
+      <span class="search-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
+      <input type="text" id="searchInput" placeholder="From: search start address (or tap map)" autocomplete="off" />
+      <button class="search-clear" id="searchClear">&times;</button>
     </div>
-    <p class="status" id="status">Your personal safety escort</p>
+    <div class="search-results" id="searchResults"></div>
+  </div>
 
-    <!-- STEP 0: Welcome -->
-    <div id="step0">
-      <p style="font-size:0.85rem;color:#6b7280;margin-bottom:0.75rem">
-        Louise dispatches a drone to escort you home safely. It watches over you the entire way.
-      </p>
-      <button class="btn-primary" id="btnStart">Walk me home</button>
-    </div>
-
-    <!-- STEP 1: Set origin + destination -->
-    <div id="step1" style="display:none">
-      <button class="btn-primary btn-small" id="btnLocate" style="margin-bottom:0.6rem">
-        <span style="margin-right:0.3rem">📍</span> Share my location
-      </button>
-      <div id="originDisplay" style="display:none"></div>
-
-      <div class="input-group">
-        <label>Where are you going?</label>
-        <input id="destInput" type="text" placeholder="Search address or tap the map..." />
+  <div class="bottom-sheet" id="sheet">
+    <div class="sheet-handle"></div>
+    <div class="sheet-content" id="sheetContent">
+      <div id="stateIdle">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+          <div style="width:26px;height:26px;border-radius:6px;background:#111;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;font-weight:700">L</div>
+          <span style="font-size:16px;font-weight:700;color:#111">Louise</span>
+        </div>
+        <p style="font-size:13px;color:#888;line-height:1.5;margin-bottom:8px" id="idleHint">
+          Set <strong style="color:#111">From</strong> and <strong style="color:#111">To</strong>, then request a drone escort.
+        </p>
+        <div class="loc-row">
+          <div class="loc-dot origin"></div>
+          <span class="loc-label placeholder" id="originLabel">From: not set</span>
+          <button type="button" class="loc-change" id="btnShareLocation">Share location</button>
+        </div>
+        <div class="loc-row" style="margin-top:2px">
+          <div class="loc-dot dest"></div>
+          <span class="loc-label placeholder" id="destLabelIdle">To: search above or tap map</span>
+        </div>
       </div>
-      <div id="destDisplay" style="display:none"></div>
 
-      <p style="font-size:0.75rem;color:#9ca3af;margin-top:0.3rem">
-        Tap the map to set your destination, or type an address above
-      </p>
-    </div>
-
-    <!-- STEP 2: Route ready -->
-    <div id="step2" style="display:none">
-      <div class="route-card" id="routeCard"></div>
-      <button class="btn-order" id="btnOrder">
-        <span style="margin-right:0.4rem">🛸</span> Request drone escort
-      </button>
-      <button class="btn-outline" id="btnReset">Change route</button>
-    </div>
-
-    <!-- STEP 3: Drone active -->
-    <div id="step3" style="display:none">
-      <div class="drone-status" id="droneStatusCard">
-        <span class="pulse-dot"></span>
-        <span id="droneStatusText">Drone dispatched from hub</span>
+      <div id="stateRoute" style="display:none">
+        <div class="loc-row">
+          <div class="loc-dot origin"></div>
+          <span class="loc-label" id="routeOriginLabel">Your location</span>
+          <button class="loc-change" id="btnChangeOrigin">Change</button>
+        </div>
+        <div class="loc-row">
+          <div class="loc-dot dest"></div>
+          <span class="loc-label" id="routeDestLabel">Destination</span>
+          <button class="loc-change" id="btnChangeDest">Change</button>
+        </div>
+        <div class="route-info" id="routeInfo"></div>
+        <button class="btn btn-primary" id="btnRequest">Request drone escort</button>
       </div>
-      <div class="route-card" id="etaCard"></div>
-      <button class="btn-danger" id="btnDistress">I need help</button>
-      <button class="btn-outline" id="btnSafe">I'm safe &mdash; cancel escort</button>
-    </div>
 
-    <!-- STEP 4: Distress countdown -->
-    <div id="step4" style="display:none">
-      <div class="distress-panel">
-        <p><strong>Alert sent.</strong> Dismiss within 15 seconds or emergency services will be contacted.</p>
-        <div class="countdown" id="countdown">15</div>
-        <button class="btn-safe" id="btnDismiss" style="margin-top:0.5rem">I'm safe &mdash; cancel alert</button>
+      <div id="statePlanned" style="display:none">
+        <div class="eta-card">
+          <div class="eta-time" id="etaTime">--</div>
+          <div class="eta-label" id="etaLabel">Drone arrives in</div>
+        </div>
+        <div class="route-info" id="plannedInfo" style="font-size:12px"></div>
+        <button class="btn btn-go" id="btnGo">Start walking</button>
+        <button class="btn btn-outline" id="btnCancelPlan">Cancel</button>
+      </div>
+
+      <div id="stateActive" style="display:none">
+        <div class="drone-card" id="droneCard">
+          <span class="pulse-dot"></span>
+          <div style="flex:1">
+            <div class="drone-text" id="droneText">Connecting...</div>
+            <div class="drone-sub" id="droneSub"></div>
+          </div>
+          <span class="live-badge" id="liveBadge" style="display:none">Live</span>
+        </div>
+        <button class="btn btn-danger" id="btnDistress">I need help</button>
+        <button class="btn btn-primary" id="btnArrived">I've arrived — send drone home</button>
+        <button class="btn btn-outline" id="btnCancel">I'm safe — cancel</button>
+      </div>
+
+      <div id="stateDistress" style="display:none">
+        <div class="distress-box">
+          <p><strong>Alert sent.</strong> Dismiss within 15 seconds or emergency services will be contacted.</p>
+          <div class="countdown" id="countdown">15</div>
+          <button class="btn" style="background:#111;color:#fff;margin-top:12px" id="btnDismiss">I'm safe — cancel alert</button>
+        </div>
       </div>
     </div>
   </div>
 
-  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
   <script>
-    const HUB = [48.8809, 2.3553];
+    (function loadMapThenApp() {
+      function run() {
+    const HUB = [48.8606, 2.3376];
     const PARIS = [48.8566, 2.3522];
-    const API = '';
 
-    // ── Map ──────────────────────────────────────────────────────────────
     const map = L.map('map', { zoomControl: false }).setView(PARIS, 14);
-
-    // Clean Carto light basemap (Google Maps style)
     L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
       maxZoom: 19
     }).addTo(map);
-
     L.control.zoom({ position: 'topright' }).addTo(map);
 
-    // Hub marker
     const hubIcon = L.divIcon({
       className: '',
-      html: '<div style="width:32px;height:32px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:8px;border:2.5px solid #fff;box-shadow:0 2px 8px rgba(0,0,0,0.18);display:flex;align-items:center;justify-content:center;font-size:16px;color:#fff">L</div>',
-      iconSize: [32, 32], iconAnchor: [16, 16],
+      html: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V10.5z" fill="#111" stroke="#fff" stroke-width="1.5"/><rect x="9" y="14" width="6" height="7" rx="0.5" fill="#fff"/></svg>`,
+      iconSize: [22, 22], iconAnchor: [11, 19],
     });
-    L.marker(HUB, { icon: hubIcon }).addTo(map).bindPopup('<strong>Louise Hub</strong><br>Gare du Nord, Paris');
+    L.marker(HUB, { icon: hubIcon }).addTo(map).bindPopup('<strong>Louise Drone Centre</strong><br>Louvre, Paris');
 
-    // ── State ────────────────────────────────────────────────────────────
     let origin = null, dest = null;
+    let destDisplayName = '';
     let originMarker = null, destMarker = null;
-    let routeLayer = null, hubToUserLayer = null, trackLayer = null, homeLayer = null;
+    let routeLayer = null, approachLayer = null, escortLayer = null, returnLayer = null;
     let droneMarker = null, ws = null;
-    let countdownInterval = null, countdownLeft = 15;
+    let routeCoords = null;
+    let missionStats = null;
+    let countdownInterval = null;
+    let watchId = null;
+    let lastPositionSend = 0;
 
-    function showStep(n) {
-      ['step0','step1','step2','step3','step4'].forEach(id =>
-        document.getElementById(id).style.display = id === `step${n}` ? 'block' : 'none'
+    const states = ['stateIdle', 'stateRoute', 'statePlanned', 'stateActive', 'stateDistress'];
+    function showState(id) {
+      states.forEach(s => document.getElementById(s).style.display = s === id ? '' : 'none');
+      repositionLocateBtn();
+    }
+
+    function repositionLocateBtn() {
+      const sheet = document.getElementById('sheet');
+      const btn = document.getElementById('btnLocate');
+      const h = sheet.offsetHeight;
+      btn.style.bottom = (h + 12) + 'px';
+    }
+    window.addEventListener('resize', repositionLocateBtn);
+    setTimeout(repositionLocateBtn, 100);
+
+    function updateIdleHint() {
+      const hint = document.getElementById('idleHint');
+      if (!hint) return;
+      if (origin && dest) hint.innerHTML = 'From and To set. Request drone escort below.';
+      else if (origin) hint.innerHTML = 'From set. Now set <strong style="color:#111">To</strong>: search above or tap the map.';
+      else hint.innerHTML = 'Set <strong style="color:#111">From</strong> and <strong style="color:#111">To</strong>, then request a drone escort.';
+    }
+
+    function updateSearchPlaceholder() {
+      searchInput.placeholder = origin
+        ? 'To: where are you going? (search or tap map)'
+        : 'From: search start address (or tap map)';
+    }
+
+    async function reverseGeocode(lat, lng) {
+      try {
+        const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=18`, {
+          headers: { 'User-Agent': 'LouiseWalkHome/1.0' }
+        });
+        const data = await resp.json();
+        const parts = (data.display_name || '').split(',');
+        return parts.slice(0, 3).join(',').trim() || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+      } catch { return `${lat.toFixed(5)}, ${lng.toFixed(5)}`; }
+    }
+
+    function shareLocation() {
+      const lbl = document.getElementById('originLabel');
+      lbl.textContent = 'Getting location...';
+      lbl.classList.remove('placeholder');
+      navigator.geolocation.getCurrentPosition(
+        async (pos) => {
+          origin = [pos.coords.latitude, pos.coords.longitude];
+          placeOrigin(origin);
+          const name = await reverseGeocode(origin[0], origin[1]);
+          lbl.textContent = name;
+          map.setView(origin, 15);
+          updateIdleHint();
+          updateSearchPlaceholder();
+        },
+        () => {
+          lbl.textContent = 'From: not set';
+          lbl.classList.add('placeholder');
+          updateIdleHint();
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
       );
     }
-    function setStatus(msg) { document.getElementById('status').textContent = msg; }
 
-    // ── Step 0 ───────────────────────────────────────────────────────────
-    document.getElementById('btnStart').onclick = () => {
-      showStep(1);
-      setStatus('Set your start location and destination');
-      map.on('click', onMapClick);
-    };
-
-    // ── Step 1: Location + Destination ──────────────────────────────────
-    document.getElementById('btnLocate').onclick = async () => {
-      setStatus('Getting your location...');
-      document.getElementById('btnLocate').disabled = true;
-      try {
-        const pos = await new Promise((res, rej) =>
-          navigator.geolocation.getCurrentPosition(res, rej, { enableHighAccuracy: true, timeout: 8000 })
-        );
-        origin = [pos.coords.latitude, pos.coords.longitude];
-      } catch {
-        origin = [48.8795, 2.3565];
-      }
-      placeOrigin(origin);
-      document.getElementById('btnLocate').disabled = false;
-    };
+    document.getElementById('btnShareLocation').onclick = () => shareLocation();
+    document.getElementById('btnLocate').onclick = () => shareLocation();
 
     function placeOrigin(latlng) {
-      origin = latlng;
       if (originMarker) map.removeLayer(originMarker);
-      const icon = L.divIcon({
-        className: '',
-        html: '<div style="width:14px;height:14px;background:#2563eb;border:2.5px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.2)"></div>',
-        iconSize: [14, 14], iconAnchor: [7, 7],
-      });
-      originMarker = L.marker(origin, { icon }).addTo(map);
-      map.panTo(origin);
-      document.getElementById('originDisplay').style.display = 'block';
-      document.getElementById('originDisplay').innerHTML = `
-        <div class="location-row"><span class="dot"></span><span class="coords">You: ${origin[0].toFixed(5)}, ${origin[1].toFixed(5)}</span></div>
-      `;
-      setStatus('Now set your destination');
-      if (dest) fetchRoute();
+      originMarker = L.marker(latlng, {
+        icon: L.divIcon({
+          className: '',
+          html: '<div style="width:14px;height:14px;background:#111;border:3px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.2)"></div>',
+          iconSize: [14, 14], iconAnchor: [7, 7],
+        }),
+        zIndexOffset: 500,
+      }).addTo(map);
     }
 
     function placeDest(latlng) {
       dest = latlng;
       if (destMarker) map.removeLayer(destMarker);
-      destMarker = L.marker(dest, {
+      destMarker = L.marker(latlng, {
         icon: L.divIcon({
           className: '',
-          html: '<div style="width:12px;height:12px;background:#dc2626;border:2.5px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.15)"></div>',
+          html: '<div style="width:12px;height:12px;background:#555;border:3px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.2)"></div>',
           iconSize: [12, 12], iconAnchor: [6, 6],
-        })
-      }).addTo(map).bindPopup('Destination');
-      document.getElementById('destDisplay').style.display = 'block';
-      document.getElementById('destDisplay').innerHTML = `
-        <div class="location-row" style="background:#fef2f2;border-color:#fecaca;color:#dc2626">
-          <span class="dot" style="background:#dc2626"></span>
-          <span class="coords">${dest[0].toFixed(5)}, ${dest[1].toFixed(5)}</span>
-        </div>
-      `;
-      document.getElementById('destInput').value = `${dest[0].toFixed(5)}, ${dest[1].toFixed(5)}`;
-      if (origin) fetchRoute();
+        }),
+      }).addTo(map);
     }
 
-    function onMapClick(e) {
+    const searchInput = document.getElementById('searchInput');
+    const searchResults = document.getElementById('searchResults');
+    const searchClear = document.getElementById('searchClear');
+    let searchTimeout = null;
+
+    async function applyAddressAsFromOrTo(lat, lng, displayName) {
+      searchInput.value = '';
+      searchResults.style.display = 'none';
+      searchClear.style.display = 'none';
+      map.flyTo([lat, lng], 15, { duration: 0.8 });
       if (!origin) {
-        placeOrigin([e.latlng.lat, e.latlng.lng]);
+        origin = [lat, lng];
+        placeOrigin(origin);
+        document.getElementById('originLabel').textContent = displayName;
+        document.getElementById('originLabel').classList.remove('placeholder');
+        updateIdleHint();
+        updateSearchPlaceholder();
+        return;
+      }
+      placeDest([lat, lng]);
+      destDisplayName = displayName;
+      document.getElementById('destLabelIdle').textContent = displayName;
+      document.getElementById('destLabelIdle').classList.remove('placeholder');
+      updateIdleHint();
+      fetchRoute();
+    }
+
+    searchInput.addEventListener('keydown', async (e) => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      const first = searchResults.querySelector('.search-result');
+      if (first && first.dataset.lat) {
+        const lat = parseFloat(first.dataset.lat);
+        const lng = parseFloat(first.dataset.lng);
+        const name = first.querySelector('.sr-name')?.textContent || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+        applyAddressAsFromOrTo(lat, lng, name);
+        return;
+      }
+      const q = searchInput.value.trim();
+      if (q.length < 2) return;
+      searchResults.innerHTML = '<div class="search-status">Searching...</div>';
+      searchResults.style.display = 'block';
+      try {
+        const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&addressdetails=1`, {
+          headers: { 'Accept': 'application/json', 'User-Agent': 'LouiseWalkHome/1.0' }
+        });
+        const results = await resp.json();
+        if (!results || !results.length) {
+          searchResults.innerHTML = '<div class="search-status">No results. Try a different address or tap the map.</div>';
+          return;
+        }
+        const r = results[0];
+        const lat = parseFloat(r.lat);
+        const lng = parseFloat(r.lon);
+        const parts = (r.display_name || '').split(',');
+        const displayName = parts.slice(0, 3).join(',').trim() || `${lat.toFixed(4)}, ${lng.toFixed(4)}`;
+        applyAddressAsFromOrTo(lat, lng, displayName);
+      } catch (err) {
+        searchResults.innerHTML = '<div class="search-status">Search failed. Check connection or tap the map.</div>';
+      }
+    });
+
+    searchInput.addEventListener('input', () => {
+      clearTimeout(searchTimeout);
+      const q = searchInput.value.trim();
+      searchClear.style.display = q ? 'block' : 'none';
+      if (q.length < 2) { searchResults.style.display = 'none'; return; }
+      searchResults.innerHTML = '<div class="search-status">Searching...</div>';
+      searchResults.style.display = 'block';
+      searchTimeout = setTimeout(async () => {
+        try {
+          const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=6&addressdetails=1`, {
+            headers: { 'Accept': 'application/json', 'User-Agent': 'LouiseWalkHome/1.0' }
+          });
+          const results = await resp.json();
+          if (!results || !results.length) {
+            searchResults.innerHTML = '<div class="search-status">No results. Try a place name or full address.</div>';
+            return;
+          }
+          searchResults.innerHTML = results.map((r, i) => {
+            const parts = (r.display_name || '').split(',');
+            const name = parts[0].trim();
+            const addr = parts.slice(1, 4).join(',').trim();
+            return `<div class="search-result" data-idx="${i}" data-lat="${r.lat}" data-lng="${r.lon}">
+              <span class="sr-icon">&bull;</span>
+              <div><div class="sr-name">${name}</div><div class="sr-addr">${addr}</div></div>
+            </div>`;
+          }).join('');
+          searchResults.style.display = 'block';
+        } catch (err) {
+          searchResults.innerHTML = '<div class="search-status">Search failed.</div>';
+        }
+      }, 400);
+    });
+
+    searchResults.addEventListener('click', (e) => {
+      const el = e.target.closest('.search-result');
+      if (!el || !el.dataset.lat) return;
+      const lat = parseFloat(el.dataset.lat);
+      const lng = parseFloat(el.dataset.lng);
+      if (isNaN(lat) || isNaN(lng)) return;
+      const name = el.querySelector('.sr-name')?.textContent || '';
+      applyAddressAsFromOrTo(lat, lng, name);
+    });
+
+    searchClear.onclick = () => {
+      searchInput.value = '';
+      searchResults.style.display = 'none';
+      searchClear.style.display = 'none';
+      searchInput.focus();
+    };
+
+    map.on('click', async (e) => {
+      if (document.getElementById('stateActive').style.display !== 'none') return;
+      if (document.getElementById('statePlanned').style.display !== 'none') return;
+      if (!origin) {
+        origin = [e.latlng.lat, e.latlng.lng];
+        placeOrigin(origin);
+        document.getElementById('originLabel').textContent = 'Getting address...';
+        const name = await reverseGeocode(origin[0], origin[1]);
+        document.getElementById('originLabel').textContent = name;
+        document.getElementById('originLabel').classList.remove('placeholder');
+        updateIdleHint();
+        updateSearchPlaceholder();
         return;
       }
       placeDest([e.latlng.lat, e.latlng.lng]);
-      map.off('click', onMapClick);
-    }
-
-    // Address search (geocode via Nominatim)
-    let searchTimeout = null;
-    document.getElementById('destInput').addEventListener('input', (e) => {
-      clearTimeout(searchTimeout);
-      const q = e.target.value.trim();
-      if (q.length < 3) return;
-      searchTimeout = setTimeout(async () => {
-        try {
-          const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&countrycodes=fr`);
-          const results = await resp.json();
-          if (results.length) {
-            const r = results[0];
-            placeDest([parseFloat(r.lat), parseFloat(r.lon)]);
-            map.flyTo(dest, 15);
-            map.off('click', onMapClick);
-          }
-        } catch {}
-      }, 600);
+      document.getElementById('destLabelIdle').textContent = 'Getting address...';
+      const name = await reverseGeocode(e.latlng.lat, e.latlng.lng);
+      destDisplayName = name;
+      document.getElementById('destLabelIdle').textContent = name;
+      document.getElementById('destLabelIdle').classList.remove('placeholder');
+      searchInput.value = '';
+      searchClear.style.display = 'none';
+      updateIdleHint();
+      fetchRoute();
     });
 
-    // ── Fetch route ──────────────────────────────────────────────────────
     async function fetchRoute() {
-      setStatus('Calculating walking route...');
+      if (!origin || !dest) return;
+      const routeInfoEl = document.getElementById('routeInfo');
       try {
-        const resp = await fetch(`${API}/api/route`, {
+        routeInfoEl.innerHTML = '<span style="color:#888">Getting route...</span>';
+        showState('stateRoute');
+        const resp = await fetch('/api/route', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ origin, destination: dest }),
         });
         const data = await resp.json();
+        if (!data.coords || data.coords.length < 2) {
+          routeInfoEl.innerHTML = '';
+          showState('stateIdle');
+          alert(data.detail || data.error || 'Could not get a route. Try two places in the same region.');
+          return;
+        }
+        routeCoords = data.coords;
         const latlngs = data.coords.map(c => [c[1], c[0]]);
         if (routeLayer) map.removeLayer(routeLayer);
-        routeLayer = L.polyline(latlngs, { color: '#2563eb', weight: 4, opacity: 0.7 }).addTo(map);
-        map.fitBounds(routeLayer.getBounds(), { padding: [40, 40] });
+        routeLayer = L.polyline(latlngs, { color: '#111', weight: 4, opacity: 0.6 }).addTo(map);
+        map.fitBounds(routeLayer.getBounds(), { padding: [60, 120] });
 
-        const dist = haversine(origin, dest);
-        const mins = Math.max(1, Math.round(dist / 80));
-        document.getElementById('routeCard').innerHTML = `
+        const distM = data.distance_m != null ? data.distance_m : haversine(origin, dest);
+        const walkMin = data.duration_s != null ? Math.round(data.duration_s / 60) : Math.max(1, Math.round(distM / 80));
+
+        document.getElementById('routeOriginLabel').textContent =
+          document.getElementById('originLabel').textContent || `${origin[0].toFixed(4)}, ${origin[1].toFixed(4)}`;
+        document.getElementById('routeDestLabel').textContent = destDisplayName || `${dest[0].toFixed(4)}, ${dest[1].toFixed(4)}`;
+
+        const note = data.source === 'fallback' && data.detail
+          ? '<br><span style="font-size:11px;color:#b45309">' + data.detail + '</span>'
+          : '<br><span style="font-size:11px;color:#999">A drone will watch over you the entire way</span>';
+        routeInfoEl.innerHTML = `
           <strong>Walking route</strong><br>
-          Distance: ~${Math.round(dist)}m &nbsp;&bull;&nbsp; Est. ${mins} min<br>
-          <span style="color:#9ca3af;font-size:0.78rem">Drone will escort you the entire way</span>
+          ${(distM / 1000).toFixed(1)} km &middot; ~${walkMin} min walk
+          ${note}
         `;
-        window._orsCoords = data.coords;
-        showStep(2);
-        setStatus('Route ready');
+
+        showState('stateRoute');
       } catch (e) {
-        setStatus('Route error: ' + e.message);
+        console.error('Route error:', e);
+        routeInfoEl.innerHTML = '';
+        showState('stateIdle');
+        alert('Route request failed.');
       }
     }
 
-    // ── Step 2: Order drone ──────────────────────────────────────────────
-    document.getElementById('btnOrder').onclick = async () => {
-      setStatus('Dispatching drone from Louise Hub...');
-      document.getElementById('btnOrder').disabled = true;
+    document.getElementById('btnRequest').onclick = async () => {
+      const btn = document.getElementById('btnRequest');
+      btn.disabled = true;
+      btn.textContent = 'Planning...';
       try {
-        const resp = await fetch(`${API}/api/order`, {
+        const resp = await fetch('/api/order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ origin, destination: dest, route: window._orsCoords || null }),
+          body: JSON.stringify({ origin, destination: dest, route: routeCoords || null }),
         });
         const data = await resp.json();
+        if (data.detail || data.error) throw new Error(data.detail || data.error);
 
-        // Draw flight paths
+        missionStats = data.stats;
+
         if (data.routes) {
-          if (hubToUserLayer) map.removeLayer(hubToUserLayer);
-          if (trackLayer) map.removeLayer(trackLayer);
-          if (homeLayer) map.removeLayer(homeLayer);
-          hubToUserLayer = L.polyline(data.routes.hub_to_user, { color: '#f59e0b', weight: 2, dashArray: '6,4', opacity: 0.5 }).addTo(map);
-          trackLayer     = L.polyline(data.routes.track,       { color: '#22c55e', weight: 2, dashArray: '6,4', opacity: 0.5 }).addTo(map);
-          homeLayer      = L.polyline(data.routes.home,        { color: '#94a3b8', weight: 2, dashArray: '4,4', opacity: 0.4 }).addTo(map);
+          [approachLayer, escortLayer, returnLayer].forEach(l => { if (l) map.removeLayer(l); });
+          approachLayer = L.polyline(data.routes.approach, { color: '#888', weight: 2, dashArray: '6,4', opacity: 0.5 }).addTo(map);
+          escortLayer   = L.polyline(data.routes.escort,   { color: '#111', weight: 3, opacity: 0.7 }).addTo(map);
+          returnLayer   = L.polyline(data.routes['return'], { color: '#aaa', weight: 2, dashArray: '4,4', opacity: 0.4 }).addTo(map);
         }
 
-        document.getElementById('etaCard').innerHTML = `
-          <strong>Drone en route</strong><br>
-          Phases: approach (${data.waypoints.hub_to_user} wp) &rarr; escort (${data.waypoints.track} wp) &rarr; return (${data.waypoints.home} wp)
+        const etaMin = Math.max(1, Math.ceil((data.approach_eta_s || 0) / 60));
+        document.getElementById('etaTime').textContent = `~${etaMin} min`;
+        document.getElementById('etaLabel').textContent = 'Drone arrives in';
+
+        const s = data.stats || {};
+        document.getElementById('plannedInfo').innerHTML = `
+          <strong>${s.total_waypoints} waypoints</strong> generated<br>
+          Approach (${s.approach_wp} wp) &rarr; Escort (${s.escort_wp} wp) &rarr; Return (${s.return_wp} wp)<br>
+          Total flight: ~${Math.round((s.estimated_flight_time_s||0)/60)} min &middot; ${s.total_distance_m}m
         `;
-        showStep(3);
-        setStatus('Drone is on its way to you');
-        connectWebSocket();
+
+        showState('statePlanned');
       } catch (e) {
-        setStatus('Order failed: ' + e.message);
-        document.getElementById('btnOrder').disabled = false;
+        alert('Failed: ' + e.message);
       }
+      btn.disabled = false;
+      btn.textContent = 'Request drone escort';
     };
 
-    document.getElementById('btnReset').onclick = () => {
-      [routeLayer, originMarker, destMarker, hubToUserLayer, trackLayer, homeLayer].forEach(l => { if (l) map.removeLayer(l); });
-      origin = dest = null;
-      window._orsCoords = null;
-      document.getElementById('originDisplay').style.display = 'none';
-      document.getElementById('destDisplay').style.display = 'none';
-      document.getElementById('destInput').value = '';
-      showStep(1);
-      setStatus('Set your start location and destination');
-      map.on('click', onMapClick);
+    document.getElementById('btnGo').onclick = async () => {
+      const btn = document.getElementById('btnGo');
+      btn.disabled = true;
+      btn.textContent = 'Starting ArduPilot...';
+      try {
+        const resp = await fetch('/api/mission/start', { method: 'POST' });
+        const data = await resp.json();
+        if (data.detail) throw new Error(data.detail);
+        showState('stateActive');
+        document.getElementById('droneText').textContent = 'Arming...';
+        document.getElementById('droneSub').textContent = '';
+        document.getElementById('liveBadge').style.display = 'none';
+        startLiveTracking();
+      } catch (e) {
+        alert('Launch failed: ' + e.message);
+      }
+      btn.disabled = false;
+      btn.textContent = 'Start walking';
     };
 
-    // ── WebSocket ────────────────────────────────────────────────────────
+    document.getElementById('btnCancelPlan').onclick = () => {
+      [approachLayer, escortLayer, returnLayer].forEach(l => { if (l) map.removeLayer(l); });
+      showState('stateRoute');
+    };
+
+    document.getElementById('btnChangeOrigin').onclick = () => {
+      origin = null;
+      if (originMarker) { map.removeLayer(originMarker); originMarker = null; }
+      document.getElementById('originLabel').textContent = 'From: not set';
+      document.getElementById('originLabel').classList.add('placeholder');
+      if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+      searchInput.value = '';
+      updateSearchPlaceholder();
+      searchInput.focus();
+      showState('stateIdle');
+      updateIdleHint();
+    };
+    document.getElementById('btnChangeDest').onclick = () => {
+      dest = null;
+      destDisplayName = '';
+      if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
+      if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+      document.getElementById('destLabelIdle').textContent = 'To: search above or tap map';
+      document.getElementById('destLabelIdle').classList.add('placeholder');
+      searchInput.value = '';
+      updateSearchPlaceholder();
+      searchInput.focus();
+      showState('stateIdle');
+      updateIdleHint();
+    };
+
     function connectWebSocket() {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
       const proto = location.protocol === 'https:' ? 'wss' : 'ws';
       ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+      ws.onopen = () => {
+        setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' })); }, 20000);
+      };
 
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === 'position') {
-          updateDrone(msg.lat, msg.lng, msg.phase);
-          updateDroneStatus(msg.phase, msg.waypoint_index, msg.total_waypoints);
+          updateDrone(msg);
+          if (document.getElementById('stateActive').style.display !== 'none' && msg.source === 'ardupilot') {
+            document.getElementById('liveBadge').style.display = 'inline-block';
+            document.getElementById('liveBadge').textContent = 'Live';
+          }
         } else if (msg.type === 'phase') {
-          setStatus(phaseLabel(msg.phase));
+          if (document.getElementById('stateActive').style.display !== 'none') {
+            document.getElementById('droneText').textContent = phaseLabel(msg.phase);
+          }
+        } else if (msg.type === 'mission_started') {
+          if (document.getElementById('stateActive').style.display !== 'none' ||
+              document.getElementById('statePlanned').style.display !== 'none') {
+            showState('stateActive');
+            document.getElementById('droneText').textContent = 'Mission started';
+            document.getElementById('droneSub').textContent = '';
+            startLiveTracking();
+          }
+        } else if (msg.type === 'sitl_status') {
+          if (document.getElementById('statePlanned').style.display !== 'none' ||
+              document.getElementById('stateActive').style.display !== 'none') {
+            const btn = document.getElementById('btnGo');
+            if (msg.status === 'starting') btn.textContent = 'Starting SITL...';
+            else if (msg.status === 'running') btn.textContent = 'SITL ready — launching...';
+          }
         } else if (msg.type === 'complete') {
-          setStatus('You arrived safely. Drone returning to hub.');
-          if (droneMarker) setTimeout(() => { if (droneMarker) map.removeLayer(droneMarker); }, 3000);
+          stopLiveTracking();
+          document.getElementById('droneText').textContent = 'Mission complete';
+          document.getElementById('droneSub').textContent = 'Drone returned to hub';
+          document.getElementById('liveBadge').style.display = 'none';
+          if (droneMarker) setTimeout(() => { if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; } }, 5000);
         }
       };
-      ws.onclose = () => {};
-      setInterval(() => { if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 20000);
+
+      ws.onclose = () => {
+        document.getElementById('liveBadge').style.display = 'none';
+        setTimeout(connectWebSocket, 3000);
+      };
     }
+    connectWebSocket();
 
     const droneIcon = L.divIcon({
       className: '',
-      html: '<div style="width:20px;height:20px;background:#fff;border:2.5px solid #2563eb;border-radius:50%;box-shadow:0 2px 8px rgba(37,99,235,0.35);display:flex;align-items:center;justify-content:center;font-size:11px">🛸</div>',
-      iconSize: [20, 20], iconAnchor: [10, 10],
+      html: '<div style="width:14px;height:14px;background:#22c55e;border:2.5px solid #111;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3);animation:dronePulse 1.2s infinite"></div>',
+      iconSize: [14, 14], iconAnchor: [7, 7],
     });
 
-    function updateDrone(lat, lng, phase) {
+    function updateDrone(msg) {
+      if (msg.lat == null || msg.lng == null) return;
       if (!droneMarker) {
-        droneMarker = L.marker([lat, lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
+        droneMarker = L.marker([msg.lat, msg.lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
       } else {
-        droneMarker.setLatLng([lat, lng]);
+        droneMarker.setLatLng([msg.lat, msg.lng]);
+      }
+      document.getElementById('droneText').textContent = phaseLabel(msg.phase) || '—';
+      const tw = msg.total_waypoints; const wi = msg.waypoint_index;
+      const pct = (typeof tw === 'number' && typeof wi === 'number' && tw > 0) ? Math.round((wi / tw) * 100) : null;
+      const altText = (msg.alt != null && !isNaN(msg.alt)) ? ' · ' + Math.round(msg.alt) + 'm' : '';
+      document.getElementById('droneSub').textContent = (pct != null ? pct + '% complete' : '—') + altText;
+      if (document.getElementById('stateActive').style.display !== 'none' && map.getZoom() >= 14) {
+        const dronePos = L.latLng(msg.lat, msg.lng);
+        if (!map.getBounds().contains(dronePos)) map.panTo(dronePos, { animate: true, duration: 0.5 });
       }
     }
 
     function phaseLabel(p) {
-      return { hub_to_user: 'Drone approaching you', track: 'Drone is escorting you', home: 'Drone returning to hub' }[p] || p;
+      return { approach: 'Drone approaching', escort: 'Drone escorting you', 'return': 'Drone returning to hub' }[p] || (p ? String(p).replace(/_/g, ' ') : '');
     }
 
-    function updateDroneStatus(phase, idx, total) {
-      const pct = Math.round((idx / total) * 100);
-      document.getElementById('droneStatusText').textContent = `${phaseLabel(phase)} — ${pct}%`;
+    function startLiveTracking() {
+      if (watchId != null) return;
+      if (!navigator.geolocation) return;
+      watchId = navigator.geolocation.watchPosition(
+        function (pos) {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            var now = Date.now();
+            if (now - lastPositionSend < 800) return;
+            lastPositionSend = now;
+            ws.send(JSON.stringify({ type: 'user_position', lat: pos.coords.latitude, lng: pos.coords.longitude }));
+          }
+        },
+        function () { },
+        { enableHighAccuracy: true, maximumAge: 2000, timeout: 5000 }
+      );
     }
 
-    // ── Distress ─────────────────────────────────────────────────────────
+    function stopLiveTracking() {
+      if (watchId != null && navigator.geolocation) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+      }
+    }
+
     document.getElementById('btnDistress').onclick = () => {
-      showStep(4);
+      showState('stateDistress');
       startCountdown();
-      if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
+      if (navigator.vibrate) navigator.vibrate([500, 200, 500]);
     };
 
-    document.getElementById('btnSafe').onclick = () => {
+    document.getElementById('btnCancel').onclick = () => {
+      stopLiveTracking();
       if (ws) ws.close();
-      [hubToUserLayer, trackLayer, homeLayer].forEach(l => { if (l) map.removeLayer(l); });
-      if (droneMarker) map.removeLayer(droneMarker);
-      droneMarker = null;
-      showStep(0);
-      setStatus('Escort cancelled. Stay safe!');
+      ws = null;
+      [approachLayer, escortLayer, returnLayer, routeLayer].forEach(l => { if (l) map.removeLayer(l); });
+      if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; }
+      showState('stateIdle');
+    };
+
+    document.getElementById('btnArrived').onclick = () => {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'user_arrived' }));
+        stopLiveTracking();
+        document.getElementById('droneText').textContent = 'Drone returning to hub';
+        document.getElementById('droneSub').textContent = 'Sent — drone heading home';
+      }
     };
 
     document.getElementById('btnDismiss').onclick = () => {
       clearInterval(countdownInterval);
-      showStep(3);
-      setStatus('Alert dismissed. Drone continues escort.');
+      showState('stateActive');
     };
 
+    let countdownLeft = 15;
     function startCountdown() {
       countdownLeft = 15;
       document.getElementById('countdown').textContent = countdownLeft;
@@ -471,30 +801,36 @@
         document.getElementById('countdown').textContent = countdownLeft;
         if (countdownLeft <= 0) {
           clearInterval(countdownInterval);
-          triggerEmergency();
+          document.getElementById('countdown').textContent = 'SENT';
+          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'emergency', origin }));
+          setTimeout(() => {
+            showState('stateActive');
+            document.getElementById('droneCard').style.background = '#fff';
+            document.getElementById('droneCard').style.borderColor = '#dc2626';
+            document.getElementById('droneText').textContent = 'Emergency — drone locked on position';
+            document.getElementById('droneText').style.color = '#dc2626';
+          }, 1500);
         }
       }, 1000);
     }
 
-    function triggerEmergency() {
-      document.getElementById('countdown').textContent = 'SENT';
-      if (ws && ws.readyState === 1) ws.send(JSON.stringify({ type: 'emergency', origin }));
-      setTimeout(() => {
-        setStatus('Emergency services have been notified');
-        showStep(3);
-        document.getElementById('droneStatusCard').style.background = '#fef2f2';
-        document.getElementById('droneStatusCard').style.borderColor = '#fecaca';
-        document.getElementById('droneStatusText').textContent = 'Emergency mode — drone locked on your position';
-        document.getElementById('droneStatusText').style.color = '#dc2626';
-      }, 1500);
-    }
-
-    // ── Util ─────────────────────────────────────────────────────────────
     function haversine([lat1, lng1], [lat2, lng2]) {
       const R = 6371000, dLat = (lat2-lat1)*Math.PI/180, dLng = (lng2-lng1)*Math.PI/180;
       const a = Math.sin(dLat/2)**2 + Math.cos(lat1*Math.PI/180)*Math.cos(lat2*Math.PI/180)*Math.sin(dLng/2)**2;
       return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
     }
+      }
+      if (window.L) { run(); return; }
+      var s = document.createElement('script');
+      s.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+      s.async = false;
+      s.onload = run;
+      s.onerror = function() {
+        var el = document.getElementById('map');
+        if (el) el.innerHTML = '<div style="padding:24px;text-align:center;font-size:14px;color:#888">Loading map...</div>';
+      };
+      document.head.appendChild(s);
+    })();
   </script>
 </body>
 </html>

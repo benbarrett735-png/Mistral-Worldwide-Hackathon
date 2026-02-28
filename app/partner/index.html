@@ -8,136 +8,203 @@
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Inter', system-ui, sans-serif; background: #f8f9fb; color: #1a1a1a; height: 100vh; overflow: hidden; }
-    .layout { display: grid; grid-template-columns: 1fr 380px; height: 100vh; }
-    @media (max-width: 960px) { .layout { grid-template-columns: 1fr; grid-template-rows: 50vh 1fr; } }
-    #map { width: 100%; height: 100%; }
+    body { font-family: 'Inter', system-ui, sans-serif; background: #fafafa; color: #111; height: 100vh; overflow: hidden; }
+    .layout { display: grid; grid-template-rows: 50vh 1fr; grid-template-columns: 1fr; height: 100vh; overflow: hidden; }
+    .top-row { display: grid; grid-template-columns: 1fr 1fr; height: 100%; min-height: 0; overflow: hidden; }
+    #map { width: 100%; height: 100%; min-height: 0; overflow: hidden; }
 
-    /* Sidebar */
-    .sidebar { background: #fff; border-left: 1px solid #e5e7eb; overflow-y: auto; display: flex; flex-direction: column; }
+    .ardupilot-panel {
+      background: #111; color: #ccc; display: flex; flex-direction: column;
+      border-left: 1px solid #222; font-family: 'JetBrains Mono', monospace; font-size: 0.7rem;
+    }
+    .ap-header {
+      padding: 0.45rem 0.7rem; background: #181818; border-bottom: 1px solid #282828;
+      font-weight: 600; color: #fff; letter-spacing: 0.04em; font-size: 0.72rem;
+    }
+    .ap-hint {
+      padding: 0.25rem 0.7rem; font-size: 0.58rem; color: #555; background: #151515;
+      border-bottom: 1px solid #222;
+    }
+    .ap-status {
+      display: grid; grid-template-columns: auto 1fr; gap: 0.15rem 0.7rem;
+      padding: 0.4rem 0.7rem; background: #161616; border-bottom: 1px solid #222;
+      font-size: 0.64rem;
+    }
+    .ap-status label { color: #666; }
+    .ap-status span { color: #ddd; }
+
+    .drone-3d {
+      flex: 1; min-height: 100px; background: #0a0a0a; position: relative;
+      border-bottom: 1px solid #222;
+    }
+    .drone-3d canvas { display: block; width: 100% !important; height: 100% !important; }
+
+    .ap-console {
+      flex: 1; overflow-y: auto; padding: 0.4rem 0.7rem; white-space: pre-wrap; word-break: break-all;
+      font-size: 0.6rem; line-height: 1.45; color: #555;
+    }
+    .ap-console .ap-line { margin: 0.08rem 0; }
+    .ap-console .ap-line.cmd { color: #aaa; }
+
+    .bottom-half {
+      overflow-y: auto; background: #fff; border-top: 1px solid #e5e5e5;
+      display: flex; flex-direction: column;
+    }
+    @media (max-width: 960px) {
+      .top-row { grid-template-columns: 1fr; grid-template-rows: 40vh 40vh; }
+    }
 
     .header {
-      padding: 0.9rem 1.1rem; border-bottom: 1px solid #e5e7eb;
-      display: flex; align-items: center; gap: 0.6rem;
+      padding: 0.75rem 1rem; border-bottom: 1px solid #eee;
+      display: flex; align-items: center; gap: 0.5rem;
       background: #fff; position: sticky; top: 0; z-index: 10;
     }
     .logo-icon {
-      width: 28px; height: 28px; border-radius: 8px;
-      background: linear-gradient(135deg, #2563eb, #7c3aed);
-      display: flex; align-items: center; justify-content: center;
-      font-size: 14px; color: #fff; flex-shrink: 0;
+      width: 26px; height: 26px; border-radius: 6px;
+      background: #111; display: flex; align-items: center; justify-content: center;
+      font-size: 13px; color: #fff; font-weight: 700; flex-shrink: 0;
     }
-    .logo-text { font-size: 0.95rem; font-weight: 700; color: #1a1a1a; }
-    .logo-sub { font-size: 0.75rem; color: #9ca3af; font-weight: 400; margin-left: 0.3rem; }
-    .ws-dot { width: 8px; height: 8px; border-radius: 50%; background: #dc2626; margin-left: auto; flex-shrink: 0; }
-    .ws-dot.connected { background: #22c55e; }
+    .logo-text { font-size: 0.9rem; font-weight: 700; color: #111; }
+    .logo-sub { font-size: 0.72rem; color: #999; font-weight: 400; margin-left: 0.25rem; }
+    .ws-dot { width: 7px; height: 7px; border-radius: 50%; background: #ccc; margin-left: auto; flex-shrink: 0; }
+    .ws-dot.connected { background: #111; }
 
-    .section { padding: 0.8rem 1.1rem; border-bottom: 1px solid #f3f4f6; }
+    .section { padding: 0.7rem 1rem; border-bottom: 1px solid #f0f0f0; }
     .section-title {
-      font-size: 0.65rem; font-weight: 600; text-transform: uppercase;
-      letter-spacing: 0.08em; color: #9ca3af; margin-bottom: 0.5rem;
+      font-size: 0.6rem; font-weight: 600; text-transform: uppercase;
+      letter-spacing: 0.08em; color: #999; margin-bottom: 0.4rem;
     }
 
-    /* Phase cards */
+    .idle-banner {
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      padding: 2rem 1.5rem; text-align: center; color: #999;
+    }
+    .idle-banner .idle-title { font-size: 0.9rem; font-weight: 600; color: #666; margin-bottom: 0.25rem; }
+    .idle-banner .idle-sub { font-size: 0.75rem; line-height: 1.5; }
+
     .phase {
-      display: flex; align-items: center; gap: 0.6rem;
-      padding: 0.55rem 0.7rem; border-radius: 8px; margin: 0.25rem 0;
-      background: #f9fafb; border: 1px solid #f3f4f6;
-      transition: all 0.3s;
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.5rem 0.6rem; border-radius: 6px; margin: 0.2rem 0;
+      background: #fafafa; border: 1px solid #eee; transition: all 0.3s;
     }
-    .phase.active { background: #eff6ff; border-color: #bfdbfe; }
-    .phase.done { background: #f0fdf4; border-color: #bbf7d0; }
-    .ph-icon { font-size: 1rem; width: 1.3rem; text-align: center; }
-    .ph-label { font-size: 0.82rem; font-weight: 500; flex: 1; }
-    .ph-sub { font-size: 0.68rem; color: #9ca3af; }
+    .phase.active { background: #f5f5f5; border-color: #ccc; }
+    .phase.done { background: #fafafa; border-color: #ddd; }
+    .ph-icon { font-size: 0.7rem; width: 1.1rem; text-align: center; color: #999; }
+    .ph-label { font-size: 0.78rem; font-weight: 500; flex: 1; }
+    .ph-sub { font-size: 0.65rem; color: #999; }
     .ph-badge {
-      padding: 0.12rem 0.45rem; border-radius: 20px;
-      font-size: 0.62rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em;
+      padding: 0.1rem 0.4rem; border-radius: 3px;
+      font-size: 0.58rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
     }
-    .ph-badge.pending { background: #f3f4f6; color: #9ca3af; }
-    .ph-badge.active  { background: #2563eb; color: #fff; animation: pulse 1.5s infinite; }
-    .ph-badge.done    { background: #16a34a; color: #fff; }
+    .ph-badge.pending { background: #f0f0f0; color: #999; }
+    .ph-badge.active  { background: #111; color: #fff; animation: pulse 1.5s infinite; }
+    .ph-badge.done    { background: #ddd; color: #666; }
     @keyframes pulse { 50% { opacity: 0.6; } }
+    @keyframes dronePulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.5); } 50% { opacity: 0.7; box-shadow: 0 0 0 6px rgba(34,197,94,0); } }
 
-    /* Telemetry */
-    .telemetry { display: grid; grid-template-columns: 1fr 1fr; gap: 0.4rem; }
-    .tele-card { background: #f9fafb; border: 1px solid #f3f4f6; border-radius: 8px; padding: 0.5rem 0.6rem; }
-    .tele-label { font-size: 0.6rem; font-weight: 600; color: #9ca3af; text-transform: uppercase; letter-spacing: 0.06em; }
-    .tele-value { font-size: 1.05rem; font-weight: 700; color: #1a1a1a; }
-    .tele-unit  { font-size: 0.6rem; color: #9ca3af; margin-left: 0.15rem; }
+    .telemetry { display: grid; grid-template-columns: 1fr 1fr 1fr 1fr; gap: 0.3rem; }
+    .tele-card { background: #fafafa; border: 1px solid #eee; border-radius: 6px; padding: 0.4rem 0.5rem; }
+    .tele-label { font-size: 0.55rem; font-weight: 600; color: #999; text-transform: uppercase; letter-spacing: 0.05em; }
+    .tele-value { font-size: 0.95rem; font-weight: 700; color: #111; font-family: 'JetBrains Mono', monospace; }
+    .tele-unit  { font-size: 0.55rem; color: #999; margin-left: 0.1rem; }
 
-    /* Camera */
+    .mission-card {
+      background: #fafafa; border: 1px solid #eee; border-radius: 6px;
+      padding: 0.5rem 0.65rem; font-size: 0.75rem; color: #666; line-height: 1.6;
+    }
+    .mission-card strong { color: #111; }
+
     .camera-wrap {
-      position: relative; background: #111; border-radius: 8px; overflow: hidden;
-      aspect-ratio: 16/9; border: 1px solid #e5e7eb;
+      position: relative; background: #111; border-radius: 6px; overflow: hidden;
+      aspect-ratio: 16/9; border: 1px solid #eee;
     }
     .camera-wrap video, .camera-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
     .camera-overlay {
       position: absolute; inset: 0;
       display: flex; align-items: center; justify-content: center;
-      font-size: 0.75rem; color: #6b7280; background: #f3f4f6;
+      font-size: 0.72rem; color: #666; background: #f5f5f5;
     }
     .camera-badge {
-      position: absolute; top: 0.4rem; right: 0.4rem;
-      background: rgba(0,0,0,0.65); padding: 0.15rem 0.4rem; border-radius: 4px;
-      font-size: 0.6rem; font-weight: 600; color: #22c55e; letter-spacing: 0.04em;
+      position: absolute; top: 0.35rem; right: 0.35rem;
+      background: rgba(0,0,0,0.7); padding: 0.12rem 0.35rem; border-radius: 3px;
+      font-size: 0.55rem; font-weight: 600; color: #fff; letter-spacing: 0.04em;
       font-family: 'JetBrains Mono', monospace;
     }
-    .camera-badge.alert { color: #ef4444; }
 
-    /* Vision AI indicators */
     .ai-card {
-      display: flex; align-items: center; gap: 0.6rem;
-      padding: 0.6rem 0.7rem; border-radius: 8px; margin: 0.25rem 0;
+      display: flex; align-items: center; gap: 0.5rem;
+      padding: 0.5rem 0.6rem; border-radius: 6px; margin: 0.2rem 0;
       transition: all 0.3s;
     }
-    .ai-card.safe { background: #f0fdf4; border: 1px solid #bbf7d0; }
-    .ai-card.distress { background: #fef2f2; border: 1px solid #fecaca; animation: pulse 0.8s infinite; }
-    .ai-card.idle { background: #f9fafb; border: 1px solid #f3f4f6; }
-    .ai-dot { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-    .ai-dot.safe { background: #22c55e; }
-    .ai-dot.distress { background: #ef4444; }
-    .ai-dot.idle { background: #d1d5db; }
-    .ai-label { font-size: 0.82rem; font-weight: 600; }
-    .ai-detail { font-size: 0.68rem; color: #9ca3af; }
-    .ai-value { margin-left: auto; font-size: 0.72rem; font-weight: 700; font-family: 'JetBrains Mono', monospace; }
+    .ai-card.safe { background: #fafafa; border: 1px solid #ddd; }
+    .ai-card.distress { background: #fafafa; border: 1px solid #dc2626; }
+    .ai-card.idle { background: #fafafa; border: 1px solid #eee; }
+    .ai-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .ai-dot.safe { background: #111; }
+    .ai-dot.distress { background: #dc2626; }
+    .ai-dot.idle { background: #ccc; }
+    .ai-label { font-size: 0.78rem; font-weight: 500; }
+    .ai-detail { font-size: 0.65rem; color: #999; }
+    .ai-value { margin-left: auto; font-size: 0.68rem; font-weight: 600; font-family: 'JetBrains Mono', monospace; }
 
-    /* Waypoint file display */
-    .wp-files { margin: 0.3rem 0; }
+    .wp-files { margin: 0.25rem 0; }
     .wp-file {
-      display: flex; align-items: center; gap: 0.5rem;
-      padding: 0.4rem 0.6rem; margin: 0.2rem 0;
-      background: #f9fafb; border: 1px solid #f3f4f6; border-radius: 6px;
-      font-family: 'JetBrains Mono', monospace; font-size: 0.7rem; color: #6b7280;
+      display: flex; align-items: center; gap: 0.4rem;
+      padding: 0.35rem 0.5rem; margin: 0.15rem 0;
+      background: #fafafa; border: 1px solid #eee; border-radius: 4px;
+      font-family: 'JetBrains Mono', monospace; font-size: 0.65rem; color: #666;
     }
-    .wp-file .file-icon { color: #2563eb; font-size: 0.9rem; }
-    .wp-file .count { margin-left: auto; font-weight: 600; color: #1a1a1a; }
+    .wp-file .file-icon { color: #999; font-size: 0.7rem; }
+    .wp-file .count { margin-left: auto; font-weight: 600; color: #111; }
 
-    /* Event log */
     .event-log { max-height: 140px; overflow-y: auto; }
     .log-entry {
-      font-size: 0.68rem; padding: 0.2rem 0;
-      border-bottom: 1px solid #f9fafb; color: #6b7280;
+      font-size: 0.65rem; padding: 0.18rem 0;
+      border-bottom: 1px solid #f5f5f5; color: #666;
       font-family: 'JetBrains Mono', monospace;
     }
-    .log-entry.warn { color: #d97706; }
+    .log-entry.warn { color: #b45309; }
     .log-entry.danger { color: #dc2626; }
-    .log-entry .ts { color: #c5c8ce; margin-right: 0.4rem; }
+    .log-entry .ts { color: #ccc; margin-right: 0.35rem; }
 
-    /* Emergency banner */
     .emergency-banner {
-      display: none; background: #fef2f2; padding: 0.7rem 1rem;
+      display: none; background: #fff; padding: 0.6rem 1rem;
       border-top: 2px solid #dc2626; text-align: center;
-      font-size: 0.85rem; font-weight: 700; color: #dc2626;
-      animation: pulse 0.8s infinite;
+      font-size: 0.8rem; font-weight: 700; color: #dc2626;
+      letter-spacing: 0.04em;
     }
+
+    .flight-log-wrap { max-height: 160px; overflow: auto; border: 1px solid #eee; border-radius: 4px; }
+    .flight-log-table { width: 100%; border-collapse: collapse; font-size: 0.6rem; font-family: 'JetBrains Mono', monospace; }
+    .flight-log-table th { text-align: left; padding: 0.25rem 0.4rem; background: #f5f5f5; color: #666; font-weight: 600; }
+    .flight-log-table td { padding: 0.2rem 0.4rem; border-bottom: 1px solid #f0f0f0; color: #333; }
+    .flight-log-table tr:nth-child(even) { background: #fafafa; }
   </style>
 </head>
 <body>
 <div class="layout">
-  <div id="map"></div>
+  <div class="top-row">
+    <div id="map"></div>
+    <div class="ardupilot-panel">
+      <div class="ap-header">ArduPilot SITL</div>
+      <div class="ap-hint">tcp:127.0.0.1:5760</div>
+      <div class="ap-status">
+        <label>Mode</label><span id="apMode">—</span>
+        <label>Armed</label><span id="apArmed">—</span>
+        <label>Phase</label><span id="apPhase">—</span>
+        <label>WP</label><span id="apWp">—</span>
+        <label>Lat</label><span id="apLat">—</span>
+        <label>Lon</label><span id="apLon">—</span>
+        <label>Alt</label><span id="apAlt">—</span>
+        <label>Spd</label><span id="apSpd">—</span>
+        <label>Hdg</label><span id="apHdg">—</span>
+      </div>
+      <div class="drone-3d" id="drone3d" style="display:none"></div>
+      <div class="ap-console" id="apConsole">Awaiting connection</div>
+    </div>
+  </div>
 
-  <div class="sidebar">
+  <div class="bottom-half">
     <div class="header">
       <div class="logo-icon">L</div>
       <div>
@@ -147,59 +214,65 @@
       <div class="ws-dot" id="wsDot" title="Disconnected"></div>
     </div>
 
-    <!-- Phases -->
-    <div class="section">
+    <div class="section" id="idleSection">
+      <div class="idle-banner">
+        <div class="idle-title">Awaiting mission</div>
+        <div class="idle-sub">Open the user app and request a drone escort.<br>The mission will appear here automatically.</div>
+      </div>
+    </div>
+
+    <div class="section" id="missionSection" style="display:none">
+      <div class="section-title">Active mission</div>
+      <div class="mission-card" id="missionCard"></div>
+    </div>
+
+    <div class="section" id="phaseSection" style="display:none">
       <div class="section-title">Flight phases</div>
       <div class="phase" id="ph1">
-        <span class="ph-icon">🚁</span>
-        <div><div class="ph-label">Approach</div><div class="ph-sub">Hub &rarr; User</div></div>
+        <span class="ph-icon">1</span>
+        <div><div class="ph-label">Approach</div><div class="ph-sub" id="ph1sub">Hub to user</div></div>
         <span class="ph-badge pending" id="ph1-badge">Pending</span>
       </div>
       <div class="phase" id="ph2">
-        <span class="ph-icon">👁</span>
-        <div><div class="ph-label">Escort</div><div class="ph-sub">Following user home</div></div>
+        <span class="ph-icon">2</span>
+        <div><div class="ph-label">Escort</div><div class="ph-sub" id="ph2sub">Following user</div></div>
         <span class="ph-badge pending" id="ph2-badge">Pending</span>
       </div>
       <div class="phase" id="ph3">
-        <span class="ph-icon">🏠</span>
-        <div><div class="ph-label">Return</div><div class="ph-sub">Destination &rarr; Hub</div></div>
+        <span class="ph-icon">3</span>
+        <div><div class="ph-label">Return</div><div class="ph-sub" id="ph3sub">Destination to hub</div></div>
         <span class="ph-badge pending" id="ph3-badge">Pending</span>
       </div>
     </div>
 
-    <!-- Telemetry -->
-    <div class="section">
-      <div class="section-title">Telemetry</div>
+    <div class="section" id="telemetrySection" style="display:none">
+      <div class="section-title">Telemetry <span id="telSource" style="font-size:0.55rem;color:#111;font-weight:600;margin-left:0.25rem"></span></div>
       <div class="telemetry">
-        <div class="tele-card">
-          <div class="tele-label">Altitude</div>
-          <div><span class="tele-value" id="telAlt">--</span><span class="tele-unit">m</span></div>
-        </div>
-        <div class="tele-card">
-          <div class="tele-label">Progress</div>
-          <div><span class="tele-value" id="telPct">0</span><span class="tele-unit">%</span></div>
-        </div>
-        <div class="tele-card">
-          <div class="tele-label">Phase</div>
-          <div><span class="tele-value" id="telPhase" style="font-size:0.72rem">--</span></div>
-        </div>
-        <div class="tele-card">
-          <div class="tele-label">Waypoint</div>
-          <div><span class="tele-value" id="telWp">--</span></div>
-        </div>
+        <div class="tele-card"><div class="tele-label">Altitude</div><div><span class="tele-value" id="telAlt">—</span><span class="tele-unit">m</span></div></div>
+        <div class="tele-card"><div class="tele-label">Speed</div><div><span class="tele-value" id="telSpeed">—</span><span class="tele-unit">m/s</span></div></div>
+        <div class="tele-card"><div class="tele-label">Heading</div><div><span class="tele-value" id="telHeading">—</span><span class="tele-unit">deg</span></div></div>
+        <div class="tele-card"><div class="tele-label">Battery</div><div><span class="tele-value" id="telBattery">—</span><span class="tele-unit">%</span></div></div>
+      </div>
+      <div class="telemetry" style="margin-top:0.3rem">
+        <div class="tele-card"><div class="tele-label">Climb</div><div><span class="tele-value" id="telClimb">—</span><span class="tele-unit">m/s</span></div></div>
+        <div class="tele-card"><div class="tele-label">Dist to WP</div><div><span class="tele-value" id="telDistWp">—</span><span class="tele-unit">m</span></div></div>
+        <div class="tele-card"><div class="tele-label">Progress</div><div><span class="tele-value" id="telPct">—</span><span class="tele-unit">%</span></div></div>
+        <div class="tele-card"><div class="tele-label">Waypoint</div><div><span class="tele-value" id="telWp">—</span></div></div>
+      </div>
+      <div class="telemetry" style="margin-top:0.3rem">
+        <div class="tele-card"><div class="tele-label">Roll</div><div><span class="tele-value" id="telRoll">—</span><span class="tele-unit">deg</span></div></div>
+        <div class="tele-card"><div class="tele-label">Pitch</div><div><span class="tele-value" id="telPitch">—</span><span class="tele-unit">deg</span></div></div>
+        <div class="tele-card"><div class="tele-label">Satellites</div><div><span class="tele-value" id="telSats">—</span></div></div>
+        <div class="tele-card"><div class="tele-label">Phase</div><div><span class="tele-value" id="telPhase" style="font-size:0.68rem">—</span></div></div>
       </div>
     </div>
 
-    <!-- Waypoint files -->
-    <div class="section">
-      <div class="section-title">Generated waypoint files</div>
-      <div class="wp-files" id="wpFiles">
-        <div style="font-size:0.72rem;color:#c5c8ce;padding:0.3rem 0">Waiting for mission...</div>
-      </div>
+    <div class="section" id="wpSection" style="display:none">
+      <div class="section-title">Generated files</div>
+      <div class="wp-files" id="wpFiles"></div>
     </div>
 
-    <!-- Camera feed -->
-    <div class="section">
+    <div class="section" id="cameraSection" style="display:none">
       <div class="section-title">Drone camera</div>
       <div class="camera-wrap">
         <div class="camera-overlay" id="cameraOverlay"><span>No feed</span></div>
@@ -208,81 +281,211 @@
       </div>
     </div>
 
-    <!-- Vision AI -->
-    <div class="section">
-      <div class="section-title">Louise Vision AI</div>
+    <div class="section" id="visionSection" style="display:none">
+      <div class="section-title">Vision AI</div>
       <div class="ai-card idle" id="hsCard">
         <span class="ai-dot idle" id="hsDot"></span>
-        <div>
-          <div class="ai-label" id="hsLabel">Safety monitor</div>
-          <div class="ai-detail" id="hsDetail">Awaiting feed</div>
-        </div>
-        <span class="ai-value" id="hsValue">--</span>
+        <div><div class="ai-label">Helpstral — Safety monitor</div><div class="ai-detail" id="hsDetail">No feed</div></div>
+        <span class="ai-value" id="hsValue">—</span>
       </div>
       <div class="ai-card idle" id="fsCard">
         <span class="ai-dot idle" id="fsDot"></span>
-        <div>
-          <div class="ai-label" id="fsLabel">Autopilot</div>
-          <div class="ai-detail" id="fsDetail">Awaiting mission</div>
-        </div>
-        <span class="ai-value" id="fsValue">--</span>
+        <div><div class="ai-label">Flystral — Autopilot</div><div class="ai-detail" id="fsDetail">No data</div></div>
+        <span class="ai-value" id="fsValue">—</span>
       </div>
     </div>
 
-    <!-- Event log -->
+    <div class="section" id="flightLogSection" style="display:none">
+      <div class="section-title">Flight log <span style="font-size:0.55rem;color:#999;font-weight:400">(last 200 samples)</span></div>
+      <div class="flight-log-wrap">
+        <table class="flight-log-table">
+          <thead><tr><th>Time</th><th>Lat</th><th>Lng</th><th>Alt</th><th>Spd</th><th>Hdg</th><th>Phase</th></tr></thead>
+          <tbody id="flightLogBody"></tbody>
+        </table>
+      </div>
+    </div>
+
     <div class="section" style="flex:1">
       <div class="section-title">Event log</div>
       <div class="event-log" id="eventLog"></div>
     </div>
 
-    <div class="emergency-banner" id="emergencyBanner">
-      EMERGENCY — USER DISTRESS DETECTED
-    </div>
+    <div class="emergency-banner" id="emergencyBanner">EMERGENCY — USER DISTRESS DETECTED</div>
   </div>
 </div>
 
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-  const HUB = [48.8809, 2.3553];
-  const PARIS = [48.8566, 2.3522];
+  const HUB = [48.8606, 2.3376];
 
-  const map = L.map('map', { zoomControl: true }).setView(PARIS, 14);
+  const map = L.map('map', { zoomControl: true }).setView(HUB, 14);
   L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
     attribution: '&copy; OSM &copy; CARTO', maxZoom: 19
   }).addTo(map);
 
-  // Hub marker
   const hubIcon = L.divIcon({
     className: '',
-    html: '<div style="width:36px;height:36px;background:linear-gradient(135deg,#2563eb,#7c3aed);border-radius:10px;border:3px solid #fff;box-shadow:0 2px 10px rgba(0,0,0,0.18);display:flex;align-items:center;justify-content:center;font-size:17px;color:#fff;font-weight:700">L</div>',
-    iconSize: [36, 36], iconAnchor: [18, 18],
+    html: `<svg width="24" height="24" viewBox="0 0 24 24" fill="none"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V10.5z" fill="#111" stroke="#fff" stroke-width="1.5"/><rect x="9" y="14" width="6" height="7" rx="0.5" fill="#fff"/></svg>`,
+    iconSize: [24, 24], iconAnchor: [12, 21],
   });
-  L.marker(HUB, { icon: hubIcon }).addTo(map).bindPopup('<strong>Louise Hub</strong><br>Gare du Nord, Paris');
+  L.marker(HUB, { icon: hubIcon }).addTo(map).bindPopup('<strong>Louise Drone Centre</strong><br>Louvre, Paris');
+  L.circle(HUB, { radius: 3000, color: '#111', fillColor: '#111', fillOpacity: 0.02, weight: 1, dashArray: '6,4' }).addTo(map);
 
-  // Hub range circle
-  L.circle(HUB, { radius: 3000, color: '#2563eb', fillColor: '#2563eb', fillOpacity: 0.04, weight: 1, dashArray: '4,4' }).addTo(map);
-
-  let droneMarker = null;
-  let routeLayers = {};
-  const phaseOrder = ['hub_to_user', 'track', 'home'];
-  const phaseDone = new Set();
+  let droneMarker = null, routeLayers = {}, userMarker = null, destMarker = null;
   let currentPhase = null;
+  const phaseDone = new Set();
+  let hasMission = false;
+  const flightLog = [];
+  const FLIGHT_LOG_MAX = 200;
 
-  // ── WebSocket ─────────────────────────────────────────────────────────
+  // ── 3D Drone View (orbit camera: drag to rotate 360) ───────────────────
+  let scene3d, camera3d, renderer3d, droneModel, propellers = [];
+  let view3dReady = false;
+  let orbitRadius = 4.5, orbitPhi = 0.42, orbitTheta = 0.78;
+  let orbitDragging = false, orbitPrevX = 0, orbitPrevY = 0;
+
+  function setOrbitCamera() {
+    if (!camera3d) return;
+    const x = orbitRadius * Math.sin(orbitPhi) * Math.cos(orbitTheta);
+    const z = orbitRadius * Math.sin(orbitPhi) * Math.sin(orbitTheta);
+    const y = orbitRadius * Math.cos(orbitPhi);
+    camera3d.position.set(x, y, z);
+    camera3d.lookAt(0, 0, 0);
+    camera3d.updateProjectionMatrix();
+  }
+
+  function init3DView() {
+    if (view3dReady) return;
+    const box = document.getElementById('drone3d');
+    const w = box.clientWidth, h = box.clientHeight;
+    if (w < 20 || h < 20) return;
+
+    scene3d = new THREE.Scene();
+    scene3d.background = new THREE.Color(0x0d0d0d);
+    scene3d.fog = new THREE.FogExp2(0x0d0d0d, 0.06);
+
+    camera3d = new THREE.PerspectiveCamera(45, w / h, 0.1, 100);
+    setOrbitCamera();
+
+    renderer3d = new THREE.WebGLRenderer({ antialias: true, alpha: false });
+    renderer3d.setSize(w, h);
+    renderer3d.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    box.appendChild(renderer3d.domElement);
+
+    box.addEventListener('mousedown', (e) => { orbitDragging = true; orbitPrevX = e.clientX; orbitPrevY = e.clientY; });
+    box.addEventListener('mousemove', (e) => {
+      if (!orbitDragging) return;
+      orbitTheta += (e.clientX - orbitPrevX) * 0.01;
+      orbitPhi = Math.max(0.15, Math.min(Math.PI - 0.15, orbitPhi + (e.clientY - orbitPrevY) * 0.01));
+      orbitPrevX = e.clientX; orbitPrevY = e.clientY;
+      setOrbitCamera();
+    });
+    box.addEventListener('mouseup', () => { orbitDragging = false; });
+    box.addEventListener('mouseleave', () => { orbitDragging = false; });
+    box.style.cursor = 'grab';
+    box.addEventListener('mousedown', () => { box.style.cursor = 'grabbing'; });
+    box.addEventListener('mouseup', () => { box.style.cursor = 'grab'; });
+    box.addEventListener('mouseleave', () => { box.style.cursor = 'grab'; });
+
+    scene3d.add(new THREE.AmbientLight(0xffffff, 0.5));
+    const sun = new THREE.DirectionalLight(0xffffff, 0.7);
+    sun.position.set(5, 8, 3);
+    scene3d.add(sun);
+
+    const grid = new THREE.GridHelper(16, 32, 0x1a1a1a, 0x141414);
+    grid.position.y = -1.2;
+    scene3d.add(grid);
+
+    droneModel = buildDrone();
+    scene3d.add(droneModel);
+    view3dReady = true;
+    animate3D();
+
+    new ResizeObserver(() => {
+      const w2 = box.clientWidth, h2 = box.clientHeight;
+      if (w2 < 20 || h2 < 20) return;
+      camera3d.aspect = w2 / h2;
+      camera3d.updateProjectionMatrix();
+      renderer3d.setSize(w2, h2);
+    }).observe(box);
+  }
+
+  function buildDrone() {
+    const g = new THREE.Group();
+    const bodyMat = new THREE.MeshPhongMaterial({ color: 0x1a1a2e, shininess: 40 });
+    const armMat  = new THREE.MeshPhongMaterial({ color: 0x2d2d2d });
+    const motMat  = new THREE.MeshPhongMaterial({ color: 0x1f1f1f });
+    const propMat = new THREE.MeshPhongMaterial({ color: 0x666666, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.1, 0.28), bodyMat);
+    body.position.y = 0.02;
+    g.add(body);
+    const top = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.03, 0.24), new THREE.MeshPhongMaterial({ color: 0x252540 }));
+    top.position.y = 0.08;
+    g.add(top);
+
+    for (let i = 0; i < 4; i++) {
+      const a = i * Math.PI / 2 + Math.PI / 4, d = 0.6;
+      const dx = Math.cos(a) * d, dz = Math.sin(a) * d;
+
+      const arm = new THREE.Mesh(new THREE.BoxGeometry(d * 2, 0.04, 0.05), armMat);
+      arm.position.set(dx / 2, 0.02, dz / 2);
+      arm.rotation.y = -a;
+      g.add(arm);
+
+      const mot = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.055, 0.07, 12), motMat);
+      mot.position.set(dx, 0.06, dz);
+      g.add(mot);
+
+      const prop = new THREE.Mesh(new THREE.CircleGeometry(0.2, 20), propMat);
+      prop.position.set(dx, 0.12, dz);
+      prop.rotation.x = -Math.PI / 2;
+      propellers.push(prop);
+      g.add(prop);
+    }
+
+    const led = new THREE.Mesh(new THREE.SphereGeometry(0.025, 8, 8), new THREE.MeshBasicMaterial({ color: 0x22cc44 }));
+    led.position.set(0, 0.07, -0.14);
+    g.add(led);
+    const lens = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.035, 0.02, 12), new THREE.MeshPhongMaterial({ color: 0x111111 }));
+    lens.rotation.x = Math.PI / 2;
+    lens.position.set(0, 0.05, 0.15);
+    g.add(lens);
+    return g;
+  }
+
+  function animate3D() {
+    if (!view3dReady) return;
+    requestAnimationFrame(animate3D);
+    propellers.forEach((p, i) => { p.rotation.z += (i % 2 === 0 ? 0.35 : -0.35); });
+    renderer3d.render(scene3d, camera3d);
+  }
+
+  function update3DView(msg) {
+    const el = document.getElementById('drone3d');
+    if (el.style.display === 'none') { el.style.display = ''; setTimeout(init3DView, 60); }
+    if (!droneModel) return;
+    droneModel.rotation.z = (msg.roll || 0) * Math.PI / 180;
+    droneModel.rotation.x = (msg.pitch || 0) * Math.PI / 180;
+    droneModel.rotation.y = -(msg.heading || 0) * Math.PI / 180;
+    droneModel.position.y = Math.min((msg.alt || 0) / 50, 0.6);
+  }
+
+  // ── WebSocket ────────────────────────────────────────────────────────
   function connect() {
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
     const dot = document.getElementById('wsDot');
-
     ws.onopen = () => {
       dot.classList.add('connected'); dot.title = 'Connected';
-      addLog('Connected to Louise server');
-      setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({ type: 'ping' })); }, 20000);
+      addLog('Connected to server');
+      setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({type:'ping'})); }, 20000);
     };
     ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
     ws.onclose = () => {
       dot.classList.remove('connected'); dot.title = 'Reconnecting...';
-      addLog('Disconnected — retrying...', 'warn');
+      addLog('Disconnected — retrying', 'warn');
       setTimeout(connect, 3000);
     };
   }
@@ -290,54 +493,190 @@
 
   function handleEvent(msg) {
     switch (msg.type) {
-      case 'position':  updateDrone(msg); updateTelemetry(msg); break;
-      case 'phase':     handlePhaseChange(msg.phase); break;
-      case 'complete':  handleComplete(); break;
-      case 'emergency': handleEmergency(msg); break;
-      case 'flystroll': handleFlystroll(msg); break;
-      case 'pong': break;
+      case 'mission_update':  handleMissionUpdate(msg); break;
+      case 'mission_started': handleMissionStarted(msg); break;
+      case 'sitl_status':     handleSitlStatus(msg); break;
+      case 'position':        if (msg.source === 'ardupilot') {
+                                updateDrone(msg); updateTelemetry(msg);
+                                if (msg.phase && msg.phase !== currentPhase) handlePhaseChange(msg.phase);
+                              } else { updateDrone(msg); }
+                              break;
+      case 'phase':           handlePhaseChange(msg.phase); break;
+      case 'complete':        handleComplete(); break;
+      case 'emergency':       handleEmergency(msg); break;
+      case 'sitl_log':        addLog(msg.message); appendArduPilotConsole(msg.message); break;
+      case 'flystral':        handleFlystral(msg); break;
+      case 'pong':            break;
     }
   }
 
-  // ── Drone on map ──────────────────────────────────────────────────────
+  function handleMissionUpdate(msg) {
+    hasMission = true;
+    addLog('Mission received');
+    document.getElementById('idleSection').style.display = 'none';
+    document.getElementById('missionSection').style.display = '';
+    document.getElementById('phaseSection').style.display = '';
+    document.getElementById('wpSection').style.display = '';
+
+    const s = msg.stats || {}, eta = msg.approach_eta_s || 0;
+    document.getElementById('missionCard').innerHTML = `
+      <strong>${s.total_waypoints != null ? s.total_waypoints : '—'} waypoints</strong> &middot; ${s.total_distance_m != null ? s.total_distance_m+'m' : '—'} total<br>
+      Approach: ${s.approach_wp||'—'} wp &rarr; Escort: ${s.escort_wp||'—'} wp &rarr; Return: ${s.return_wp||'—'} wp<br>
+      <span style="font-size:0.7rem">ETA: ${eta > 0 ? '~'+Math.ceil(eta/60)+' min' : '—'} &middot; Flight: ${(s.estimated_flight_time_s > 0) ? '~'+Math.round(s.estimated_flight_time_s/60)+' min' : '—'}</span>
+    `;
+    resetPhases();
+    drawRoutes(msg.routes);
+    showWaypointFiles(s);
+    if (msg.user) placeMarker('user', [msg.user.lat, msg.user.lng], '#111', 'User');
+    if (msg.destination) placeMarker('dest', [msg.destination.lat, msg.destination.lng], '#555', 'Destination');
+    const all = [...(msg.routes.approach||[]),...(msg.routes.escort||[]),...(msg.routes['return']||[])];
+    if (all.length) map.fitBounds(all, { padding: [60, 60] });
+  }
+
+  function handleMissionStarted(msg) {
+    addLog('Mission started — live telemetry active');
+    document.getElementById('visionSection').style.display = '';
+    document.getElementById('cameraSection').style.display = '';
+    appendArduPilotConsole('Mission started');
+  }
+
+  function handleSitlStatus(msg) {
+    if (msg.status === 'starting') { addLog('SITL starting'); appendArduPilotConsole('SITL starting'); }
+    else if (msg.status === 'running') { addLog('SITL ready'); appendArduPilotConsole('SITL ready'); }
+  }
+
+  function placeMarker(which, latlng, color, label) {
+    const icon = L.divIcon({
+      className: '',
+      html: `<div style="width:12px;height:12px;background:${color};border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.2)"></div>`,
+      iconSize: [14, 14], iconAnchor: [7, 7],
+    });
+    if (which === 'user') {
+      if (userMarker) map.removeLayer(userMarker);
+      userMarker = L.marker(latlng, { icon }).addTo(map).bindPopup(label);
+    } else {
+      if (destMarker) map.removeLayer(destMarker);
+      destMarker = L.marker(latlng, { icon }).addTo(map).bindPopup(label);
+    }
+  }
+
   const droneIcon = L.divIcon({
     className: '',
-    html: '<div style="width:22px;height:22px;background:#fff;border:2.5px solid #2563eb;border-radius:50%;box-shadow:0 2px 8px rgba(37,99,235,0.3);display:flex;align-items:center;justify-content:center;font-size:12px">🛸</div>',
-    iconSize: [22, 22], iconAnchor: [11, 11],
+    html: '<div style="width:16px;height:16px;background:#22c55e;border:2.5px solid #111;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3);animation:dronePulse 1.2s infinite"></div>',
+    iconSize: [16, 16], iconAnchor: [8, 8],
   });
 
   function updateDrone(msg) {
-    if (!droneMarker) {
-      droneMarker = L.marker([msg.lat, msg.lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
-    } else {
-      droneMarker.setLatLng([msg.lat, msg.lng]);
-    }
+    if (msg.lat == null || msg.lng == null) return;
+    if (!droneMarker) droneMarker = L.marker([msg.lat, msg.lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
+    else droneMarker.setLatLng([msg.lat, msg.lng]);
+  }
+
+  function appendFlightLog(msg) {
+    if (msg.source !== 'ardupilot' || msg.lat == null || msg.lng == null) return;
+    flightLog.push({
+      ts: new Date().toLocaleTimeString('en-GB', { hour12: false }),
+      lat: msg.lat, lng: msg.lng, alt: msg.alt, speed: msg.ground_speed, heading: msg.heading, phase: msg.phase || '—'
+    });
+    while (flightLog.length > FLIGHT_LOG_MAX) flightLog.shift();
+    const tbody = document.getElementById('flightLogBody');
+    if (!tbody) return;
+    const slice = flightLog.slice(-50);
+    tbody.innerHTML = slice.reverse().map(p =>
+      `<tr><td>${p.ts}</td><td>${p.lat.toFixed(5)}</td><td>${p.lng.toFixed(5)}</td><td>${p.alt != null ? Math.round(p.alt) : '—'}</td><td>${p.speed != null ? p.speed.toFixed(1) : '—'}</td><td>${p.heading != null ? Math.round(p.heading) : '—'}</td><td>${p.phase}</td></tr>`
+    ).join('');
   }
 
   function updateTelemetry(msg) {
-    document.getElementById('telAlt').textContent = Math.round(msg.alt);
-    document.getElementById('telPct').textContent = Math.round((msg.waypoint_index / msg.total_waypoints) * 100);
-    document.getElementById('telPhase').textContent = (msg.phase || '--').replace(/_/g, ' ');
-    document.getElementById('telWp').textContent = `${msg.waypoint_index + 1}/${msg.total_waypoints}`;
+    if (msg.source !== 'ardupilot') return;
+    document.getElementById('telemetrySection').style.display = '';
+    document.getElementById('flightLogSection').style.display = '';
+    document.getElementById('telSource').textContent = 'LIVE';
+    appendFlightLog(msg);
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v ?? '—'; };
+    set('telAlt', (msg.alt != null && !isNaN(msg.alt)) ? Math.round(msg.alt) : '—');
+    set('telSpeed', msg.ground_speed != null ? msg.ground_speed.toFixed(1) : '—');
+    set('telHeading', msg.heading != null ? Math.round(msg.heading) : '—');
+    set('telBattery', (msg.battery_pct != null && msg.battery_pct >= 0) ? msg.battery_pct : '—');
+    set('telClimb', msg.climb_rate != null ? msg.climb_rate.toFixed(1) : '—');
+    set('telDistWp', msg.dist_to_wp != null ? Math.round(msg.dist_to_wp) : '—');
+    set('telRoll', msg.roll != null ? msg.roll.toFixed(1) : '—');
+    set('telPitch', msg.pitch != null ? msg.pitch.toFixed(1) : '—');
+    set('telSats', msg.satellites != null ? msg.satellites : '—');
+    const tw = msg.total_waypoints, wi = msg.waypoint_index;
+    const pct = (typeof tw === 'number' && typeof wi === 'number' && tw > 0) ? Math.round((wi/tw)*100) : null;
+    set('telPct', pct != null ? pct : '—');
+    set('telPhase', (msg.phase && msg.phase !== 'unknown') ? String(msg.phase).replace(/_/g,' ') : '—');
+    set('telWp', (typeof tw === 'number' && typeof wi === 'number') ? (wi+1)+'/'+tw : '—');
+    updateArduPilotPanel(msg);
+    update3DView(msg);
   }
 
-  // ── Phases ────────────────────────────────────────────────────────────
-  const phaseIds = { hub_to_user: 'ph1', track: 'ph2', home: 'ph3' };
-  const phaseLabels = { hub_to_user: 'Approach', track: 'Escort', home: 'Return' };
+  function appendArduPilotConsole(line) {
+    const el = document.getElementById('apConsole');
+    if (!el) return;
+    if (el.textContent === 'Awaiting connection') el.textContent = '';
+    const div = document.createElement('div');
+    div.className = 'ap-line ' + (/^(Mode|Armed|Taking off|Reached|Mission|Upload|Arming)/i.test(line) ? 'cmd' : '');
+    div.textContent = `> ${line}`;
+    el.appendChild(div);
+    el.scrollTop = el.scrollHeight;
+    while (el.children.length > 200) el.removeChild(el.firstChild);
+  }
+
+  function updateArduPilotPanel(msg) {
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v ?? '—'; };
+    set('apMode', 'GUIDED');
+    set('apArmed', 'Yes');
+    set('apPhase', (msg.phase && msg.phase !== 'unknown') ? String(msg.phase).replace(/_/g,' ') : '—');
+    const tw = msg.total_waypoints, wi = msg.waypoint_index;
+    set('apWp', (typeof tw === 'number' && typeof wi === 'number') ? (wi+1)+'/'+tw : '—');
+    set('apLat', msg.lat != null ? msg.lat.toFixed(6) : '—');
+    set('apLon', msg.lng != null ? msg.lng.toFixed(6) : '—');
+    set('apAlt', msg.alt != null ? `${Math.round(msg.alt)}m` : '—');
+    if (msg.voltage != null) set('apAlt', `${Math.round(msg.alt)}m ${msg.voltage}V`);
+    set('apSpd', msg.ground_speed != null ? `${msg.ground_speed.toFixed(1)}` : '—');
+    set('apHdg', msg.heading != null ? `${Math.round(msg.heading)}` : '—');
+  }
+
+  function resetTelemetryAndVision() {
+    const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v; };
+    set('apMode','—'); set('apArmed','—'); set('apPhase','—'); set('apWp','—');
+    set('apLat','—'); set('apLon','—'); set('apAlt','—'); set('apSpd','—'); set('apHdg','—');
+    set('telAlt','—'); set('telSpeed','—'); set('telHeading','—'); set('telBattery','—');
+    set('telClimb','—'); set('telDistWp','—'); set('telPct','—'); set('telPhase','—');
+    set('telWp','—'); set('telRoll','—'); set('telPitch','—'); set('telSats','—');
+    set('telSource',''); set('hsValue','—'); set('fsValue','—');
+    document.getElementById('hsDetail').textContent = 'No feed';
+    document.getElementById('fsDetail').textContent = 'No data';
+    ['hs','fs'].forEach(p => {
+      const c = document.getElementById(p+'Card'); if (c) c.className = 'ai-card idle';
+      const d = document.getElementById(p+'Dot'); if (d) d.className = 'ai-dot idle';
+    });
+    document.getElementById('drone3d').style.display = 'none';
+    flightLog.length = 0;
+    const tbody = document.getElementById('flightLogBody');
+    if (tbody) tbody.innerHTML = '';
+  }
+
+  const phaseIds = { approach:'ph1', escort:'ph2', 'return':'ph3' };
+  const phaseLabels = { approach:'Approach', escort:'Escort', 'return':'Return' };
+
+  function resetPhases() { phaseDone.clear(); currentPhase = null; ['approach','escort','return'].forEach(p => setBadge(p,'pending')); }
 
   function handlePhaseChange(phase) {
-    addLog(`Phase: ${phaseLabels[phase] || phase}`);
-    if (currentPhase && currentPhase !== phase) { phaseDone.add(currentPhase); setBadge(currentPhase, 'done'); }
+    addLog(`Phase: ${phaseLabels[phase]||phase}`);
+    if (currentPhase && currentPhase !== phase) { phaseDone.add(currentPhase); setBadge(currentPhase,'done'); }
     currentPhase = phase;
     setBadge(phase, 'active');
-    if (phase === 'track') startCamera();
+    if (phase === 'escort') startCamera();
   }
 
   function handleComplete() {
-    if (currentPhase) { phaseDone.add(currentPhase); setBadge(currentPhase, 'done'); }
-    addLog('Mission complete — drone returned');
-    stopCamera();
-    if (droneMarker) { setTimeout(() => { map.removeLayer(droneMarker); droneMarker = null; }, 2000); }
+    if (currentPhase) { phaseDone.add(currentPhase); setBadge(currentPhase,'done'); }
+    addLog('Mission complete');
+    stopCamera(); resetTelemetryAndVision();
+    if (droneMarker) setTimeout(() => { map.removeLayer(droneMarker); droneMarker = null; }, 2000);
   }
 
   function setBadge(phase, state) {
@@ -349,50 +688,72 @@
     badge.textContent = state === 'done' ? 'Done' : state === 'active' ? 'Active' : 'Pending';
   }
 
-  // ── Camera + Vision ───────────────────────────────────────────────────
-  let helpstrollInterval = null;
-
+  let helpstralInterval = null;
   function startCamera() {
+    document.getElementById('cameraSection').style.display = '';
     document.getElementById('cameraOverlay').style.display = 'none';
     document.getElementById('cameraBadge').style.display = 'block';
-    addLog('Camera active — Louise Vision monitoring');
-    helpstrollInterval = setInterval(runHelpstroll, 5000);
+    addLog('Camera active (test frame used when no live feed)');
+    helpstralInterval = setInterval(runHelpstral, 5000);
   }
-  function stopCamera() { clearInterval(helpstrollInterval); }
+  function stopCamera() { clearInterval(helpstralInterval); }
 
-  async function runHelpstroll() {
+  async function getCameraFrameB64() {
     const video = document.getElementById('droneFeed');
-    if (video.style.display === 'none' || video.readyState < 2) return;
-    try {
+    if (video.style.display !== 'none' && video.readyState >= 2 && video.videoWidth > 0) {
       const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
       canvas.getContext('2d').drawImage(video, 0, 0);
-      const b64 = canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
-      const resp = await fetch('/api/helpstroll', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ image: b64 }) });
+      return canvas.toDataURL('image/jpeg', 0.7).split(',')[1];
+    }
+    try {
+      const r = await fetch('/api/test-frame');
+      const blob = await r.blob();
+      return await new Promise((res, rej) => {
+        const fr = new FileReader();
+        fr.onload = () => res(fr.result.split(',')[1]);
+        fr.onerror = rej;
+        fr.readAsDataURL(blob);
+      });
+    } catch (_) { return null; }
+  }
+
+  async function runHelpstral() {
+    const b64 = await getCameraFrameB64();
+    if (!b64) return;
+    try {
+      const resp = await fetch('/api/helpstral', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({image:b64}) });
       const data = await resp.json();
       setVisionAI('hs', data.status === 'DISTRESS' ? 'distress' : 'safe', data.status);
-      if (data.status === 'DISTRESS') addLog('DISTRESS detected', 'danger');
+      if (data.status === 'DISTRESS') addLog('Helpstral: DISTRESS detected', 'danger');
+      runFlystralWithFrame(b64);
+    } catch {}
+  }
+
+  async function runFlystralWithFrame(b64) {
+    if (!b64) return;
+    try {
+      const resp = await fetch('/api/flystral', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({image:b64}) });
+      const data = await resp.json();
+      setVisionAI('fs', 'safe', `${data.command}|${data.param}`);
+      document.getElementById('fsDetail').textContent = `Last: ${data.command}`;
     } catch {}
   }
 
   function setVisionAI(prefix, state, value) {
-    const card = document.getElementById(`${prefix}Card`);
-    const dot = document.getElementById(`${prefix}Dot`);
+    document.getElementById(`${prefix}Card`).className = `ai-card ${state}`;
+    document.getElementById(`${prefix}Dot`).className = `ai-dot ${state}`;
     const val = document.getElementById(`${prefix}Value`);
-    card.className = `ai-card ${state}`;
-    dot.className = `ai-dot ${state}`;
     val.textContent = value;
-    val.style.color = state === 'distress' ? '#dc2626' : state === 'safe' ? '#16a34a' : '#9ca3af';
+    val.style.color = state === 'distress' ? '#dc2626' : '#111';
   }
 
-  function handleFlystroll(msg) {
-    const cmdColors = { FOLLOW: '#16a34a', AVOID_LEFT: '#d97706', AVOID_RIGHT: '#d97706', CLIMB: '#2563eb', HOVER: '#7c3aed', REPLAN: '#ea580c', DESCEND: '#6b7280' };
-    const color = cmdColors[msg.command] || '#1a1a1a';
+  function handleFlystral(msg) {
+    document.getElementById('visionSection').style.display = '';
     setVisionAI('fs', 'safe', `${msg.command}|${msg.param}`);
-    document.getElementById('fsValue').style.color = color;
     document.getElementById('fsDetail').textContent = `Last: ${msg.command}`;
-    const level = ['AVOID_LEFT','AVOID_RIGHT','HOVER','REPLAN'].includes(msg.command) ? 'warn' : 'info';
-    addLog(`Autopilot: ${msg.command}|${msg.param}`, level);
+    addLog(`Flystral: ${msg.command}|${msg.param}`, ['AVOID_LEFT','AVOID_RIGHT','HOVER','REPLAN'].includes(msg.command) ? 'warn' : 'info');
   }
 
   function handleEmergency() {
@@ -402,51 +763,23 @@
     setTimeout(() => { document.getElementById('emergencyBanner').style.display = 'none'; }, 30000);
   }
 
-  // ── Waypoint file display ─────────────────────────────────────────────
-  async function loadWaypoints() {
-    try {
-      const resp = await fetch('/autopilot_adapter/output/mission.json');
-      if (!resp.ok) return;
-      const data = await resp.json();
-      drawRoutes({
-        hub_to_user: data.hub_to_user.map(w => [w.lat, w.lng]),
-        track: data.track.map(w => [w.lat, w.lng]),
-        home: data.home.map(w => [w.lat, w.lng]),
-      });
-      showWaypointFiles(data);
-    } catch {}
-  }
-  loadWaypoints();
-  // Re-check every 5 seconds to pick up new missions
-  setInterval(loadWaypoints, 5000);
-
   function drawRoutes(routes) {
-    const colors = { hub_to_user: '#f59e0b', track: '#22c55e', home: '#94a3b8' };
+    const colors = { approach: '#888', escort: '#111', 'return': '#aaa' };
     Object.entries(colors).forEach(([key, color]) => {
       if (routeLayers[key]) map.removeLayer(routeLayers[key]);
-      if (routes[key] && routes[key].length) {
-        routeLayers[key] = L.polyline(routes[key], { color, weight: 3, dashArray: '6,4', opacity: 0.6 }).addTo(map);
-      }
+      if (routes[key] && routes[key].length)
+        routeLayers[key] = L.polyline(routes[key], { color, weight: key==='escort'?3:2, dashArray: key==='escort'?null:'6,4', opacity: key==='escort'?0.9:0.5 }).addTo(map);
     });
-    const all = Object.values(routes).flat();
-    if (all.length) map.fitBounds(all, { padding: [50, 50] });
   }
 
-  function showWaypointFiles(data) {
-    const el = document.getElementById('wpFiles');
-    const h2u = data.hub_to_user ? data.hub_to_user.length : 0;
-    const trk = data.track ? data.track.length : 0;
-    const hm = data.home ? data.home.length : 0;
-    el.innerHTML = `
-      <div class="wp-file"><span class="file-icon">📄</span> mission.json <span class="count">${h2u+trk+hm} wp</span></div>
-      <div class="wp-file"><span class="file-icon">📄</span> mission.plan <span class="count">QGC</span></div>
-      <div class="wp-file"><span class="file-icon">🚁</span> hub_to_user <span class="count">${h2u}</span></div>
-      <div class="wp-file"><span class="file-icon">👁</span> track <span class="count">${trk}</span></div>
-      <div class="wp-file"><span class="file-icon">🏠</span> home <span class="count">${hm}</span></div>
+  function showWaypointFiles(stats) {
+    document.getElementById('wpFiles').innerHTML = `
+      <div class="wp-file"><span class="file-icon">&mdash;</span> mission.waypoints <span class="count">WPL</span></div>
+      <div class="wp-file"><span class="file-icon">&mdash;</span> mission.plan <span class="count">QGC</span></div>
+      <div class="wp-file"><span class="file-icon">&mdash;</span> mission.json <span class="count">${stats.total_waypoints != null ? stats.total_waypoints+' wp' : '—'}</span></div>
     `;
   }
 
-  // ── Event log ─────────────────────────────────────────────────────────
   function addLog(msg, level = 'info') {
     const log = document.getElementById('eventLog');
     const now = new Date().toLocaleTimeString('en-GB', { hour12: false });

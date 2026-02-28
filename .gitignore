@@ -11,3 +11,6 @@ venv/
 dist/
 build/
 .cursor/
+*.tlog
+*.tlog.raw
+helpstral/dataset/helpstral_dataset.jsonl

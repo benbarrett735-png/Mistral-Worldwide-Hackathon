@@ -4,3 +4,4 @@ mistralai
 httpx
 python-dotenv
 websockets
+pymavlink

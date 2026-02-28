@@ -1,0 +1,537 @@
+"""
+Louise — MAVLink connector for ArduPilot SITL.
+
+Flies waypoints using GUIDED mode with SET_POSITION_TARGET_GLOBAL_INT,
+which is the official ArduCopter GUIDED mode position control method.
+
+Flow:
+  1. Connect to SITL TCP 5760 (after MAVProxy is killed to free the port)
+  2. Arm in GUIDED mode, take off
+  3. Fly to each waypoint using SET_POSITION_TARGET_GLOBAL_INT
+  4. Stream position telemetry to stdout as JSON lines
+  5. RTL when mission complete
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import select
+import sys
+import time
+from pathlib import Path
+
+try:
+    from pymavlink import mavutil
+except ImportError:
+    print("pip install pymavlink", file=sys.stderr)
+    sys.exit(1)
+
+try:
+    from config import (
+        APPROACH_RETURN_SPEED,
+        ESCORT_SPEED,
+        FOLLOW_DISTANCE_M,
+        HUB_TO_USER_ALT,
+        TAKEOFF_ALT,
+        TRACK_ALT,
+    )
+except ImportError:
+    APPROACH_RETURN_SPEED = 50
+    ESCORT_SPEED = 12
+    FOLLOW_DISTANCE_M = 15
+    HUB_TO_USER_ALT = 60
+    TAKEOFF_ALT = 10
+    TRACK_ALT = 25
+
+
+def log(msg: str):
+    print(msg, file=sys.stderr, flush=True)
+
+
+def haversine(lat1, lng1, lat2, lng2) -> float:
+    R = 6371000
+    dlat = math.radians(lat2 - lat1)
+    dlng = math.radians(lng2 - lng1)
+    a = (math.sin(dlat / 2) ** 2 +
+         math.cos(math.radians(lat1)) * math.cos(math.radians(lat2)) *
+         math.sin(dlng / 2) ** 2)
+    return R * 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+
+
+def connect(connection_string: str) -> mavutil.mavlink_connection:
+    log(f"Connecting to {connection_string}...")
+    mav = mavutil.mavlink_connection(connection_string)
+    log("Waiting for heartbeat...")
+    mav.wait_heartbeat(timeout=60)
+    log(f"Heartbeat: system {mav.target_system}")
+
+    mav.mav.request_data_stream_send(
+        mav.target_system, mav.target_component,
+        mavutil.mavlink.MAV_DATA_STREAM_ALL, 4, 1,
+    )
+
+    log("Waiting for GPS fix...")
+    for _ in range(30):
+        pos = mav.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=3)
+        if pos and abs(pos.lat / 1e7) > 1:
+            log(f"Position: {pos.lat / 1e7:.6f}, {pos.lon / 1e7:.6f}")
+            break
+        time.sleep(1)
+    else:
+        log("WARNING: No GPS fix")
+
+    time.sleep(2)
+    return mav
+
+
+def set_wpnav_speed(mav, speed_m_s: float):
+    """Set ArduPilot WPNAV_SPEED in cm/s so the copter flies faster to waypoints."""
+    speed_cms = int(speed_m_s * 100)
+    mav.mav.param_set_send(
+        mav.target_system,
+        mav.target_component,
+        b"WPNAV_SPEED",
+        float(speed_cms),
+        mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
+    )
+    time.sleep(0.5)
+    log(f"WPNAV_SPEED set to {speed_m_s} m/s")
+
+
+def set_mode(mav, mode_name: str):
+    mode_id = mav.mode_mapping().get(mode_name)
+    if mode_id is None:
+        log(f"Unknown mode: {mode_name}")
+        return
+    mav.set_mode(mode_id)
+    time.sleep(1)
+    log(f"Mode → {mode_name}")
+
+
+def fly_to(mav, lat: float, lng: float, alt: float):
+    """Send GUIDED position target using SET_POSITION_TARGET_GLOBAL_INT."""
+    # type_mask: use position only (bits 0-2 = 0), ignore vel/acc/yaw
+    type_mask = 0b0000111111111000  # 0x0FF8
+    mav.mav.set_position_target_global_int_send(
+        0,  # time_boot_ms (ignored)
+        mav.target_system,
+        mav.target_component,
+        mavutil.mavlink.MAV_FRAME_GLOBAL_RELATIVE_ALT_INT,
+        type_mask,
+        int(lat * 1e7),
+        int(lng * 1e7),
+        alt,
+        0, 0, 0,  # vx, vy, vz (ignored)
+        0, 0, 0,  # afx, afy, afz (ignored)
+        0, 0,  # yaw, yaw_rate (ignored)
+    )
+
+
+def drain_and_get(mav, msg_type: str):
+    """Get the LATEST message of a type, draining any buffered ones first."""
+    last = None
+    while True:
+        msg = mav.recv_match(type=msg_type, blocking=False)
+        if msg is None:
+            break
+        last = msg
+    if last is None:
+        last = mav.recv_match(type=msg_type, blocking=True, timeout=0.5)
+    return last
+
+
+def get_position(mav) -> tuple[float, float, float] | None:
+    last = drain_and_get(mav, "GLOBAL_POSITION_INT")
+    if last:
+        return last.lat / 1e7, last.lon / 1e7, last.relative_alt / 1000.0
+    return None
+
+
+def get_rich_telemetry(mav) -> dict | None:
+    """Get full telemetry from multiple MAVLink messages."""
+    pos = drain_and_get(mav, "GLOBAL_POSITION_INT")
+    if not pos:
+        return None
+
+    result = {
+        "lat": pos.lat / 1e7,
+        "lng": pos.lon / 1e7,
+        "alt": round(pos.relative_alt / 1000.0, 1),
+        "heading": round(pos.hdg / 100.0, 1) if pos.hdg != 65535 else 0,
+        "vx": round(pos.vx / 100.0, 1),
+        "vy": round(pos.vy / 100.0, 1),
+        "vz": round(pos.vz / 100.0, 1),
+        "ground_speed": round(math.sqrt((pos.vx/100.0)**2 + (pos.vy/100.0)**2), 1),
+        "climb_rate": round(-pos.vz / 100.0, 1),
+    }
+
+    # Battery
+    bat = drain_and_get(mav, "SYS_STATUS")
+    if bat:
+        result["battery_pct"] = bat.battery_remaining if bat.battery_remaining >= 0 else -1
+        result["voltage"] = round(bat.voltage_battery / 1000.0, 1)
+
+    # Attitude (roll/pitch/yaw)
+    att = drain_and_get(mav, "ATTITUDE")
+    if att:
+        result["roll"] = round(math.degrees(att.roll), 1)
+        result["pitch"] = round(math.degrees(att.pitch), 1)
+        result["yaw"] = round(math.degrees(att.yaw), 1)
+
+    # GPS info
+    gps = drain_and_get(mav, "GPS_RAW_INT")
+    if gps:
+        result["satellites"] = gps.satellites_visible
+        result["gps_fix"] = gps.fix_type
+
+    return result
+
+
+def arm_and_takeoff(mav, altitude: float):
+    mav.mav.param_set_send(
+        mav.target_system, mav.target_component,
+        b'ARMING_CHECK', 0, mavutil.mavlink.MAV_PARAM_TYPE_INT32,
+    )
+    time.sleep(1)
+
+    # Check if already armed and airborne
+    pos = get_position(mav)
+    hb = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=3)
+    already_armed = hb and (hb.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+    already_airborne = pos and pos[2] > 3.0
+
+    if already_armed and already_airborne:
+        log(f"Already armed and airborne at {pos[2]:.1f}m")
+        set_mode(mav, "GUIDED")
+        time.sleep(1)
+        log("Ready for navigation")
+        return
+
+    set_mode(mav, "GUIDED")
+    time.sleep(2)
+
+    for attempt in range(10):
+        log(f"Arming ({attempt + 1}/10)...")
+        mav.arducopter_arm()
+        ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=3)
+        if ack:
+            log(f"  ACK: cmd={ack.command} result={ack.result}")
+        for _ in range(20):
+            hb = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
+            if hb and (hb.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
+                log("Armed")
+                break
+        else:
+            time.sleep(2)
+            continue
+        break
+    else:
+        log("WARNING: arm not confirmed")
+
+    log(f"Takeoff → {altitude}m")
+    mav.mav.command_long_send(
+        mav.target_system, mav.target_component,
+        mavutil.mavlink.MAV_CMD_NAV_TAKEOFF,
+        0, 0, 0, 0, 0, 0, 0, altitude,
+    )
+
+    ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=5)
+    if ack:
+        log(f"  Takeoff ACK: cmd={ack.command} result={ack.result}")
+
+    for _ in range(120):
+        msg = mav.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=2)
+        if msg:
+            alt_now = msg.relative_alt / 1000.0
+            if alt_now >= altitude * 0.85:
+                log(f"Reached {alt_now:.1f}m")
+                break
+        time.sleep(0.5)
+    else:
+        log("WARNING: Takeoff altitude not confirmed")
+
+    # After NAV_TAKEOFF, the autopilot enters a takeoff sub-state.
+    # We need to wait for it to complete, then the position targets work.
+    log("Waiting for takeoff state to clear...")
+    time.sleep(5)
+
+    # Verify we can control position by sending current position as target
+    pos = get_position(mav)
+    if pos:
+        log(f"Sending position hold at {pos[0]:.6f}, {pos[1]:.6f}, {pos[2]:.1f}m")
+        fly_to(mav, pos[0], pos[1], pos[2])
+        time.sleep(2)
+
+    log("Ready for navigation")
+
+
+def position_behind_user(user_lat: float, user_lng: float, bearing_rad: float, distance_m: float) -> tuple[float, float]:
+    """Target position 'distance_m' behind user along bearing (user's direction of travel)."""
+    # Behind = opposite to bearing: add (distance_m * cos(bearing), distance_m * sin(bearing)) in north/east metres, negated
+    north_m = -distance_m * math.cos(bearing_rad)
+    east_m = -distance_m * math.sin(bearing_rad)
+    m_per_deg_lat = 111320
+    m_per_deg_lng = 111320 * math.cos(math.radians(user_lat))
+    target_lat = user_lat + north_m / m_per_deg_lat
+    target_lng = user_lng + east_m / m_per_deg_lng
+    return target_lat, target_lng
+
+
+def live_follow_loop(mav, follow_distance_m: float, track_alt: float, total_waypoints: int):
+    """
+    Read user_position from stdin, fly to position behind user at track_alt.
+    Exit when stdin receives {"type": "phase", "phase": "return"}.
+    """
+    log("Entering live follow — waiting for user position on stdin")
+    last_user_lat, last_user_lng = None, None
+    bearing_rad = 0.0  # north
+    offset_dlat, offset_dlng, offset_dalt = 0.0, 0.0, 0.0
+
+    while True:
+        # Non-blocking read stdin (Unix)
+        if select.select([sys.stdin], [], [], 0.2)[0]:
+            line = sys.stdin.readline()
+            if not line:
+                break
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                msg = json.loads(line)
+                if msg.get("type") == "phase" and msg.get("phase") == "return":
+                    log("Received phase return — exiting live follow")
+                    return
+                if msg.get("type") == "user_position":
+                    lat, lng = float(msg["lat"]), float(msg["lng"])
+                    if last_user_lat is not None and last_user_lng is not None:
+                        dlat = math.radians(lat - last_user_lat)
+                        dlng = math.radians(lng - last_user_lng) * math.cos(math.radians(lat))
+                        if dlat != 0 or dlng != 0:
+                            bearing_rad = math.atan2(dlng, dlat)
+                    last_user_lat, last_user_lng = lat, lng
+                if msg.get("type") == "flystral_offset":
+                    offset_dlat = float(msg.get("dlat", 0))
+                    offset_dlng = float(msg.get("dlng", 0))
+                    offset_dalt = float(msg.get("dalt", 0))
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                pass
+
+        if last_user_lat is None or last_user_lng is None:
+            telem = get_rich_telemetry(mav)
+            if telem:
+                event = {
+                    "type": "position",
+                    "lat": round(telem["lat"], 7),
+                    "lng": round(telem["lng"], 7),
+                    "alt": telem["alt"],
+                    "heading": telem.get("heading", 0),
+                    "ground_speed": telem.get("ground_speed", 0),
+                    "climb_rate": telem.get("climb_rate", 0),
+                    "battery_pct": telem.get("battery_pct", -1),
+                    "voltage": telem.get("voltage", 0),
+                    "roll": telem.get("roll", 0),
+                    "pitch": telem.get("pitch", 0),
+                    "yaw": telem.get("yaw", 0),
+                    "satellites": telem.get("satellites", 0),
+                    "phase": "escort",
+                    "waypoint_index": 0,
+                    "total_waypoints": total_waypoints,
+                }
+                print(json.dumps(event), flush=True)
+            time.sleep(0.5)
+            continue
+
+        target_lat, target_lng = position_behind_user(last_user_lat, last_user_lng, bearing_rad, follow_distance_m)
+        target_lat += offset_dlat
+        target_lng += offset_dlng
+        alt_m = track_alt + offset_dalt
+        fly_to(mav, target_lat, target_lng, max(5.0, alt_m))
+
+        telem = get_rich_telemetry(mav)
+        if telem:
+            event = {
+                "type": "position",
+                "lat": round(telem["lat"], 7),
+                "lng": round(telem["lng"], 7),
+                "alt": telem["alt"],
+                "heading": telem.get("heading", 0),
+                "ground_speed": telem.get("ground_speed", 0),
+                "climb_rate": telem.get("climb_rate", 0),
+                "battery_pct": telem.get("battery_pct", -1),
+                "voltage": telem.get("voltage", 0),
+                "roll": telem.get("roll", 0),
+                "pitch": telem.get("pitch", 0),
+                "yaw": telem.get("yaw", 0),
+                "satellites": telem.get("satellites", 0),
+                "dist_to_wp": round(haversine(telem["lat"], telem["lng"], target_lat, target_lng), 1),
+                "phase": "escort",
+                "waypoint_index": 0,
+                "total_waypoints": total_waypoints,
+            }
+            print(json.dumps(event), flush=True)
+
+        time.sleep(0.4)
+
+
+def fly_waypoints(mav, waypoints: list[dict], wp_accept_radius: float = 8.0) -> None:
+    """Fly a list of waypoints in GUIDED mode. Streams telemetry to stdout."""
+    total = len(waypoints)
+    for i, wp in enumerate(waypoints):
+        target_lat = wp["lat"]
+        target_lng = wp["lng"]
+        target_alt = wp["alt"]
+        phase = wp.get("phase", "unknown")
+
+        pos = get_position(mav)
+        if pos:
+            lat, lng, _ = pos
+            if haversine(lat, lng, target_lat, target_lng) < wp_accept_radius:
+                continue
+
+        fly_to(mav, target_lat, target_lng, target_alt)
+        time.sleep(0.3)
+
+        if i % 10 == 0 or i == total - 1:
+            log(f"WP {i + 1}/{total} [{phase}] → ({target_lat:.5f}, {target_lng:.5f}, {target_alt}m)")
+
+        stuck_count = 0
+        last_dist = None
+
+        while True:
+            telem = get_rich_telemetry(mav)
+            if telem is None:
+                continue
+
+            lat, lng, alt = telem["lat"], telem["lng"], telem["alt"]
+            dist = haversine(lat, lng, target_lat, target_lng)
+
+            event = {
+                "type": "position",
+                "lat": round(lat, 7),
+                "lng": round(lng, 7),
+                "alt": alt,
+                "heading": telem.get("heading", 0),
+                "ground_speed": telem.get("ground_speed", 0),
+                "climb_rate": telem.get("climb_rate", 0),
+                "battery_pct": telem.get("battery_pct", -1),
+                "voltage": telem.get("voltage", 0),
+                "roll": telem.get("roll", 0),
+                "pitch": telem.get("pitch", 0),
+                "yaw": telem.get("yaw", 0),
+                "satellites": telem.get("satellites", 0),
+                "dist_to_wp": round(dist, 1),
+                "phase": phase,
+                "waypoint_index": i,
+                "total_waypoints": total,
+            }
+            print(json.dumps(event), flush=True)
+
+            if dist < wp_accept_radius:
+                print(json.dumps({"type": "waypoint_reached", "seq": i, "phase": phase}), flush=True)
+                break
+
+            if stuck_count % 10 == 9:
+                fly_to(mav, target_lat, target_lng, target_alt)
+
+            if last_dist is not None and dist >= last_dist - 0.5:
+                stuck_count += 1
+                if stuck_count > 60:
+                    log(f"WP {i + 1}: stuck at {dist:.0f}m, skipping")
+                    break
+            else:
+                stuck_count = 0
+            last_dist = dist
+
+            time.sleep(0.5)
+
+
+def fly_mission(mav, waypoints: list[dict]):
+    """Fly approach waypoints, then live follow (stdin), then return waypoints, then RTL."""
+    approach = [w for w in waypoints if w.get("phase") == "approach"]
+    escort = [w for w in waypoints if w.get("phase") == "escort"]
+    return_wps = [w for w in waypoints if w.get("phase") == "return"]
+    total = len(waypoints)
+
+    log(f"Approach: {len(approach)} wp, then live follow, then return: {len(return_wps)} wp")
+
+    set_wpnav_speed(mav, APPROACH_RETURN_SPEED)
+    fly_waypoints(mav, approach)
+
+    set_wpnav_speed(mav, ESCORT_SPEED)
+    live_follow_loop(mav, FOLLOW_DISTANCE_M, TRACK_ALT, total)
+
+    set_wpnav_speed(mav, APPROACH_RETURN_SPEED)
+    fly_waypoints(mav, return_wps)
+
+    log("Return complete — RTL")
+    set_mode(mav, "RTL")
+
+    for _ in range(120):
+        pos = get_position(mav)
+        if pos:
+            lat, lng, alt = pos
+            event = {
+                "type": "position",
+                "lat": round(lat, 7),
+                "lng": round(lng, 7),
+                "alt": round(alt, 1),
+                "phase": "return",
+                "waypoint_index": total - 1,
+                "total_waypoints": total,
+            }
+            print(json.dumps(event), flush=True)
+            if alt < 1.0:
+                break
+        time.sleep(1)
+
+    print(json.dumps({"type": "complete"}), flush=True)
+    log("Done")
+
+
+def load_waypoints_from_json(json_path: Path) -> list[dict]:
+    with open(json_path) as f:
+        data = json.load(f)
+
+    waypoints = []
+    for phase in ("approach", "escort", "return"):
+        for wp in data.get(phase, []):
+            waypoints.append({
+                "lat": wp["lat"],
+                "lng": wp["lng"],
+                "alt": wp["alt"],
+                "phase": phase,
+            })
+    return waypoints
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Louise MAVLink GUIDED-mode flight")
+    parser.add_argument("--connection", default="tcp:127.0.0.1:5760")
+    parser.add_argument("--mission-json", default="autopilot_adapter/output/mission.json")
+    parser.add_argument("--altitude", type=float, default=None, help="Takeoff/approach alt (default from config)")
+    args = parser.parse_args()
+
+    takeoff_alt = args.altitude if args.altitude is not None else TAKEOFF_ALT
+
+    json_path = Path(args.mission_json)
+    if not json_path.exists():
+        log(f"Mission JSON not found: {json_path}")
+        sys.exit(1)
+
+    waypoints = load_waypoints_from_json(json_path)
+    if not waypoints:
+        log("No waypoints in mission JSON")
+        sys.exit(1)
+
+    log(f"Loaded {len(waypoints)} waypoints from {json_path}")
+
+    mav = connect(args.connection)
+    set_wpnav_speed(mav, APPROACH_RETURN_SPEED)
+    arm_and_takeoff(mav, takeoff_alt)
+    fly_mission(mav, waypoints)
+
+
+if __name__ == "__main__":
+    main()

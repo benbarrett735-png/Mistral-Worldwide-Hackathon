@@ -1,11 +1,11 @@
-# Helpstroll & Flystroll — Final Flow Specification
+# Helpstral & Flystral — Final Flow Specification
 
 ## App Split
 
 | App | Platform | Purpose |
 |-----|----------|---------|
 | **User app** | Phone (web) | Request escort, enter route, track drone |
-| **Partner app** | Laptop | Mission control, camera feed, waypoint status, Helpstroll overlay |
+| **Partner app** | Laptop | Mission control, camera feed, waypoint status, Helpstral overlay |
 
 ---
 
@@ -45,13 +45,13 @@
 - Matches **user's walking speed** (stays in sync).
 - **Camera swivels** to keep user in frame.
 - **Normally:** Stays on pre-planned path.
-- **If user deviates:** **Flystroll takes over** — tracks user, follows them off-path.
-- **Output:** Waypoint file for route + live updates when Flystroll intervenes.
+- **If user deviates:** **Flystral takes over** — tracks user, follows them off-path.
+- **Output:** Waypoint file for route + live updates when Flystral intervenes.
 
 ### Phase 3: Obstacle avoidance (in-flight)
 - Drone flies **lower** when escorting (not as high as approach).
 - May encounter: power lines, trees, buildings.
-- **Flystroll:** On-demand waypoint changes to avoid obstacles.
+- **Flystral:** On-demand waypoint changes to avoid obstacles.
 - Approach: fly higher to avoid lines, drop down to person; escort: lower altitude.
 
 ### Phase 4: Fly home
@@ -66,16 +66,16 @@
 | Segment | Input | Output |
 |---------|-------|--------|
 | **Hub → User** | Hub coords, user location | Waypoint file (KMZ/MAVLink) |
-| **Track user** | User's walking route | Waypoint file + live Flystroll edits |
+| **Track user** | User's walking route | Waypoint file + live Flystral edits |
 | **Home** | Destination coords, hub coords | Waypoint file |
 
 **Best approach:** Use 3D map (building heights) + pathfinding. Output format: MAVLink or KMZ for ArduPilot.
 
-**Live updates:** Flystroll can inject new waypoints during flight (deviation, obstacle).
+**Live updates:** Flystral can inject new waypoints during flight (deviation, obstacle).
 
 ---
 
-## Flystroll Role (Summary)
+## Flystral Role (Summary)
 
 - **Pre-flight:** Generate waypoint files for hub→user, track, home.
 - **In-flight takeover when:**
@@ -91,16 +91,16 @@
 1. **Order alert** — Someone pressed "Order drone".
 2. **Waypoint status:**
    - Hub → User: **Complete**
-   - Track user: **Complete** (or "Live" when Flystroll editing)
+   - Track user: **Complete** (or "Live" when Flystral editing)
    - Home: **Complete**
 3. **Live camera feed** — From drone, watching the person walk.
-4. **Helpstroll overlay** — Only flags when distress detected.
+4. **Helpstral overlay** — Only flags when distress detected.
 
 ### Layout
 - Map with routes (hub→user, track, home).
 - Status badges: Complete / In progress / Live.
 - Camera feed panel.
-- Helpstroll indicator (green = safe, red = distress).
+- Helpstral indicator (green = safe, red = distress).
 
 ---
 
@@ -140,13 +140,13 @@ Order drone ─────────────────────► G
   │                                    │                            - Routes populate
   │                                    │                            - Status: complete
   │                                    │                            - Camera feed
-  │                                    │                            - Helpstroll overlay
+  │                                    │                            - Helpstral overlay
   │
 Drone flies ◄─────────────────────── ArduPilot (waypoints)
   │
-Flystroll (live) ◄───────────────── Obstacle / deviation → new waypoints
+Flystral (live) ◄───────────────── Obstacle / deviation → new waypoints
   │
-Helpstroll ◄─────────────────────── Camera → distress check → flag if needed
+Helpstral ◄─────────────────────── Camera → distress check → flag if needed
 ```
 
 ---
@@ -163,8 +163,8 @@ Helpstroll ◄──────────────────────
 | Waypoint generation | ✅ | Hub→user, track, home (simplified) |
 | Mission control UI | ✅ | Status, map, camera placeholder |
 | Live camera feed | ⚠️ | Simulated or placeholder |
-| Helpstroll overlay | ✅ | Image upload → distress check |
-| Flystroll live edits | ⚠️ | "User deviated" mock flow |
+| Helpstral overlay | ✅ | Image upload → distress check |
+| Flystral live edits | ⚠️ | "User deviated" mock flow |
 
 ---
 
@@ -174,5 +174,5 @@ Helpstroll ◄──────────────────────
 2. User app: Leaflet map, geolocation, OpenRouteService routing, Order button.
 3. Partner app: Mission control layout, waypoint status, camera panel.
 4. Backend: Waypoint generation from route + hub + destination.
-5. Helpstroll: Image → distress API.
-6. Flystroll: Obstacle/deviation → waypoint update (mock for demo).
+5. Helpstral: Image → distress API.
+6. Flystral: Obstacle/deviation → waypoint update (mock for demo).

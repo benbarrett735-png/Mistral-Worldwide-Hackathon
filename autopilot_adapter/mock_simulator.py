@@ -18,7 +18,7 @@ SECONDS_PER_WAYPOINT = 1.5
 def load_waypoints(mission_path: Path) -> list[dict]:
     with open(mission_path) as f:
         data = json.load(f)
-    return data["hub_to_user"] + data["track"] + data["home"]
+    return data.get("approach", []) + data.get("escort", []) + data.get("return", [])
 
 
 def make_position_event(wp: dict, index: int, total: int) -> dict:

@@ -13,8 +13,8 @@
 ### Concept
 "Louise" — an AI-powered safety drone escort system for people walking alone at night. A user requests a drone via their phone; the drone flies out from a hub, escorts them home, and returns. Two fine-tuned Mistral vision models power the system:
 
-1. **Helpstroll** (Louise Vision) — distress detection from the drone camera feed. Fine-tuned Pixtral 12B to classify images as SAFE or DISTRESS.
-2. **Flystroll** (Louise Pilot) — autonomous flight commands from drone camera imagery. Fine-tuned Pixtral 12B to output structured commands (FOLLOW, AVOID_LEFT, CLIMB, HOVER, REPLAN, etc.).
+1. **Helpstral** (Louise Vision) — distress detection from the drone camera feed. Fine-tuned Pixtral 12B to classify images as SAFE or DISTRESS.
+2. **Flystral** (Louise Pilot) — autonomous flight commands from drone camera imagery. Fine-tuned Pixtral 12B to output structured commands (FOLLOW, AVOID_LEFT, CLIMB, HOVER, REPLAN, etc.).
 
 ### Why this idea
 - Strong social impact: thousands of people feel unsafe walking home alone at night
@@ -53,8 +53,8 @@ User App (phone)     POST /api/route      OpenRouteService
                      WebSocket /ws        Live drone position
 
 Mission Control      WebSocket /ws        Map + telemetry + phases
-                     POST /api/helpstroll Fine-tuned Pixtral 12B
-                     POST /api/flystroll  Fine-tuned Pixtral 12B
+                     POST /api/helpstral Fine-tuned Pixtral 12B
+                     POST /api/flystral  Fine-tuned Pixtral 12B
 ```
 
 ### Files planned
@@ -64,15 +64,15 @@ Mission Control      WebSocket /ws        Map + telemetry + phases
 - `autopilot_adapter/mock_simulator.py` — async drone position emitter
 - `app/user/index.html` — user app
 - `app/partner/index.html` — mission control
-- `helpstroll/` — distress detection model (dataset, train, infer)
-- `flystroll/` — autopilot model (dataset, train, infer, command parser)
+- `helpstral/` — distress detection model (dataset, train, infer)
+- `flystral/` — autopilot model (dataset, train, infer, command parser)
 
 ---
 
 ## Phase 3: First Code (Feb 27–28)
 
 ### Backend (server.py)
-- FastAPI with 6 endpoints: `/`, `/api/route`, `/api/order`, `/api/helpstroll`, `/api/flystroll`, `/ws`
+- FastAPI with 6 endpoints: `/`, `/api/route`, `/api/order`, `/api/helpstral`, `/api/flystral`, `/ws`
 - WebSocket connection manager broadcasting drone position to all clients
 - OpenRouteService integration with straight-line fallback
 - Waypoint generation triggered by `/api/order`, saves mission.json + mission.plan
@@ -108,25 +108,25 @@ Mission Control      WebSocket /ws        Map + telemetry + phases
 - Louise Vision AI: safety monitor (SAFE/DISTRESS) + autopilot commands
 - Event log in monospace font
 - Hub shown on map with branded marker + 3km range circle
-- Flystroll commands displayed during escort phase (FOLLOW, AVOID, HOVER, etc.)
+- Flystral commands displayed during escort phase (FOLLOW, AVOID, HOVER, etc.)
 
-### Helpstroll model
+### Helpstral model
 - Dataset generator: synthetic URL-based (10 records) + local image mode
 - JSONL format for Mistral vision fine-tuning
 - Training script: uploads to Mistral API, creates fine-tuning job, polls completion
 - Inference function: `check_distress(image_b64) -> {status, raw}`
 - Colab notebook alternative for free GPU training via Unsloth
 
-### Flystroll model
+### Flystral model
 - Dataset generator: 22 synthetic aerial image + command pairs across 7 command types
 - Command distribution: FOLLOW (8), CLIMB (3), HOVER (3), AVOID_LEFT (2), AVOID_RIGHT (2), REPLAN (2), DESCEND (2)
-- Training script: same pattern as Helpstroll
+- Training script: same pattern as Helpstral
 - Inference function: `get_command(image_b64) -> {command, param}`
 - Command parser: converts model output to waypoint adjustments (lat/lng/alt shifts)
 
 ### Integration
-- Server broadcasts mock Flystroll commands every 5 position events during track phase
-- Partner app displays Flystroll commands in AI panel + event log
+- Server broadcasts mock Flystral commands every 5 position events during track phase
+- Partner app displays Flystral commands in AI panel + event log
 - Emergency signal from user app → broadcast to all connected clients
 - Mission files served as static files for partner app to display
 

@@ -1,8 +1,8 @@
 /**
- * Paris-specific configuration for Helpstroll/Flystroll demo
+ * Paris-specific configuration for Helpstral/Flystral demo
  * Map center, drone station, demo route waypoints
  *
- * Flow: User pre-inputs walking route → Flystroll uses 3D city map
+ * Flow: User pre-inputs walking route → Flystral uses 3D city map
  * to generate drone flight path → in-flight cameras + lidar handle
  * obstacles and route deviations.
  */

@@ -8,13 +8,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import RedirectResponse
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi.responses import RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -23,17 +25,23 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
     DRONE_HUB,
-    FLYSTROLL_MODEL_ID,
-    HELPSTROLL_MODEL_ID,
+    FLYSTRAL_MODEL_ID,
+    HELPSTRAL_MODEL_ID,
+    MAV_CONNECTION,
     MISTRAL_API_KEY,
     ORS_API_KEY,
     ORS_BASE_URL,
+    OSRM_BASE_URL,
+    SITL_HOST,
+    SITL_PORT,
+    _env_warnings,
 )
-from autopilot_adapter.waypoint_generator import generate_from_ors_route, generate_all
-from autopilot_adapter.mock_simulator import simulate_async, load_waypoints
-from flystroll.command_parser import apply_command
+from autopilot_adapter.waypoint_generator import generate_from_osrm, generate_all, save_mission, haversine as wp_haversine
+from flystral.command_parser import apply_command, parse_to_waypoint_update
 
 app = FastAPI(title="Louise API")
+
+_env_warnings()
 
 # ── Static file serving ────────────────────────────────────────────────────────
 Path("autopilot_adapter/output").mkdir(parents=True, exist_ok=True)
@@ -52,6 +60,7 @@ class ConnectionManager:
     def __init__(self):
         self.connections: list[WebSocket] = []
         self.sim_task: Optional[asyncio.Task] = None
+        self.connector_proc: Optional[asyncio.subprocess.Process] = None
 
     async def connect(self, ws: WebSocket):
         await ws.accept()
@@ -71,53 +80,110 @@ class ConnectionManager:
         for ws in dead:
             self.disconnect(ws)
 
-    async def run_simulation(self, waypoints: list[dict]):
-        """Start the drone sim as a background task, broadcasting to all clients."""
+    async def run_sitl_mission(self, connector_path: Path, mission_json: Path, connection: str):
+        """
+        Run the GUIDED-mode connector as a subprocess and broadcast its JSON stdout.
+        Kills MAVProxy first so the connector can take over TCP 5760.
+        """
         if self.sim_task and not self.sim_task.done():
             self.sim_task.cancel()
 
-        flystroll_counter = 0
+        async def stream_connector():
+                # Kill MAVProxy so connector can connect to TCP 5760 directly
+                # SITL stays running with warm EKF
+                kill_proxy = await asyncio.create_subprocess_exec(
+                    "pkill", "-f", "mavproxy",
+                    stdout=asyncio.subprocess.DEVNULL,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+                await kill_proxy.wait()
+                await asyncio.sleep(2)
 
-        async def broadcast_event(event: dict):
-            nonlocal flystroll_counter
-            await self.broadcast(event)
+                proc = await asyncio.create_subprocess_exec(
+                    sys.executable, "-u",
+                    str(connector_path),
+                    "--connection", connection,
+                    "--mission-json", str(mission_json),
+                    stdin=asyncio.subprocess.PIPE,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                    cwd=str(Path(__file__).parent),
+                )
+                manager.connector_proc = proc
 
-            # Every 5 position events during the track phase, emit a mock Flystroll command
-            if event.get("type") == "position" and event.get("phase") == "track":
-                flystroll_counter += 1
-                if flystroll_counter % 5 == 0:
-                    # Mock Flystroll without a real image (demo mode)
-                    demo_commands = [
-                        {"command": "FOLLOW", "param": "0.7"},
-                        {"command": "FOLLOW", "param": "0.5"},
-                        {"command": "AVOID_LEFT", "param": "2"},
-                        {"command": "FOLLOW", "param": "0.8"},
-                        {"command": "HOVER", "param": "2"},
-                    ]
-                    cmd = demo_commands[(flystroll_counter // 5 - 1) % len(demo_commands)]
-                    await self.broadcast({
-                        "type": "flystroll",
-                        "command": cmd["command"],
-                        "param": cmd["param"],
-                        "source": "demo",
-                    })
+                async def relay_stderr():
+                    while proc.stderr:
+                        line = await proc.stderr.readline()
+                        if not line:
+                            break
+                        text = line.decode().strip()
+                        if text:
+                            await self.broadcast({"type": "sitl_log", "message": text})
 
-        self.sim_task = asyncio.create_task(simulate_async(waypoints, broadcast_event))
+                asyncio.create_task(relay_stderr())
+
+                last_event = None
+                try:
+                    while proc.stdout:
+                        line = await proc.stdout.readline()
+                        if not line:
+                            break
+                        text = line.decode().strip()
+                        if not text:
+                            continue
+                        try:
+                            event = json.loads(text)
+                            event["source"] = "ardupilot"
+                            last_event = event
+                            await self.broadcast(event)
+                        except json.JSONDecodeError:
+                            pass
+                except asyncio.CancelledError:
+                    if proc.returncode is None:
+                        proc.kill()
+                    raise
+                finally:
+                    manager.connector_proc = None
+                    if last_event and last_event.get("type") != "complete":
+                        await self.broadcast({"type": "complete", "source": "ardupilot"})
+
+        self.sim_task = asyncio.create_task(stream_connector())
 
 
 manager = ConnectionManager()
+_current_mission: dict | None = None
+
+
+async def _send_to_connector(obj: dict) -> bool:
+    """Send a JSON line to the connector stdin (for live follow). Returns True if sent."""
+    proc = manager.connector_proc
+    if proc is None or proc.returncode is not None or proc.stdin is None:
+        return False
+    try:
+        proc.stdin.write((json.dumps(obj) + "\n").encode())
+        await proc.stdin.drain()
+        return True
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        return False
 
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
+    if _current_mission is not None:
+        await ws.send_json(_current_mission["broadcast"])
     try:
         while True:
-            # Keep connection alive; client can send pings or control messages
             data = await ws.receive_text()
             msg = json.loads(data)
             if msg.get("type") == "ping":
                 await ws.send_json({"type": "pong"})
+            elif msg.get("type") == "user_position" and isinstance(msg.get("lat"), (int, float)) and isinstance(msg.get("lng"), (int, float)):
+                await _send_to_connector({"type": "user_position", "lat": msg["lat"], "lng": msg["lng"]})
+            elif msg.get("type") == "user_arrived":
+                await _send_to_connector({"type": "phase", "phase": "return"})
+            elif msg.get("type") == "emergency":
+                await manager.broadcast({"type": "emergency", "origin": msg.get("origin")})
     except WebSocketDisconnect:
         manager.disconnect(ws)
 
@@ -134,121 +200,294 @@ class OrderRequest(BaseModel):
     route: Optional[list[list[float]]] = None  # ORS polyline coords [[lng, lat], ...]
 
 
-class HelpstrollRequest(BaseModel):
+class HelpstralRequest(BaseModel):
     image: str  # base64-encoded image
 
 
-class FlystrollRequest(BaseModel):
+class FlystralRequest(BaseModel):
     image: str  # base64-encoded image
+
+
+# Minimal 1x1 grey JPEG for test/placeholder feed (e.g. when no real camera)
+_TEST_FRAME_B64 = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q=="
+
+
+@app.get("/api/test-frame", response_class=Response)
+async def get_test_frame():
+    """
+    Return a minimal JPEG image for use as a placeholder when no real drone camera feed is available.
+    Partner app can fetch this and use it for Helpstral/Flystral so vision APIs still run.
+    """
+    return Response(content=base64.b64decode(_TEST_FRAME_B64), media_type="image/jpeg")
 
 
 # ── /api/route ─────────────────────────────────────────────────────────────────
+def _straight_line_coords(lat1: float, lng1: float, lat2: float, lng2: float, num_points: int = 25) -> list:
+    """Return [[lng, lat], ...] as a straight line between the two points (for fallback when routing fails)."""
+    return [
+        [lng1 + (lng2 - lng1) * i / (num_points - 1), lat1 + (lat2 - lat1) * i / (num_points - 1)]
+        for i in range(num_points)
+    ]
+
+
 @app.post("/api/route")
 async def get_route(req: RouteRequest):
     """
-    Get a walking route from OpenRouteService.
-    Returns a GeoJSON polyline of [lng, lat] coordinates.
-    Falls back to a straight line if ORS is unavailable or no API key.
+    Get a walking route via OSRM (free), then ORS if key set, then straight-line fallback.
+    Returns coords as [[lng, lat], ...]. Always returns coords so the user can proceed.
     """
-    if not ORS_API_KEY:
-        # Demo fallback: straight line divided into segments
-        lat1, lng1 = req.origin
-        lat2, lng2 = req.destination
-        coords = [
-            [lng1 + (lng2 - lng1) * t / 8, lat1 + (lat2 - lat1) * t / 8]
-            for t in range(9)
-        ]
-        return {"coords": coords, "source": "straight_line"}
+    lat1, lng1 = req.origin
+    lat2, lng2 = req.destination
 
+    # Primary: OSRM public server (1 req/sec limit; use User-Agent)
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.post(
-                f"{ORS_BASE_URL}/directions/foot-walking/geojson",
-                headers={
-                    "Authorization": ORS_API_KEY,
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "coordinates": [
-                        [req.origin[1], req.origin[0]],       # ORS wants [lng, lat]
-                        [req.destination[1], req.destination[0]],
-                    ]
-                },
+        async with httpx.AsyncClient(timeout=15) as client:
+            url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson"
+            resp = await client.get(
+                url,
+                headers={"User-Agent": "LouiseWalkHome/1.0 (safety escort demo)"},
             )
             resp.raise_for_status()
             data = resp.json()
-            coords = data["features"][0]["geometry"]["coordinates"]  # [[lng, lat], ...]
-            return {"coords": coords, "source": "ors"}
-    except Exception as e:
-        # Fallback if ORS fails
-        lat1, lng1 = req.origin
-        lat2, lng2 = req.destination
-        coords = [
-            [lng1 + (lng2 - lng1) * t / 8, lat1 + (lat2 - lat1) * t / 8]
-            for t in range(9)
-        ]
-        return {"coords": coords, "source": "fallback", "error": str(e)}
+            if data.get("routes") and len(data["routes"]) > 0:
+                route = data["routes"][0]
+                coords = route["geometry"]["coordinates"]
+                if coords and len(coords) >= 2:
+                    return {
+                        "coords": coords,
+                        "distance_m": route.get("distance"),
+                        "duration_s": route.get("duration"),
+                        "points": len(coords),
+                        "source": "osrm",
+                    }
+    except Exception:
+        pass
 
+    # Fallback: ORS (needs API key)
+    if ORS_API_KEY:
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.post(
+                    f"{ORS_BASE_URL}/directions/foot-walking/geojson",
+                    headers={"Authorization": ORS_API_KEY, "Content-Type": "application/json"},
+                    json={"coordinates": [[lng1, lat1], [lng2, lat2]]},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("features") and len(data["features"]) > 0:
+                    coords = data["features"][0]["geometry"]["coordinates"]
+                    if coords:
+                        return {"coords": coords, "source": "ors", "points": len(coords)}
+        except Exception:
+            pass
 
-# ── /api/order ─────────────────────────────────────────────────────────────────
-@app.post("/api/order")
-async def order_drone(req: OrderRequest):
-    """
-    Generate waypoint files for all 3 flight phases and kick off the sim.
-    Returns waypoint summary and starts broadcasting position updates via WS.
-    """
-    hub = (DRONE_HUB["lat"], DRONE_HUB["lng"])
-
-    if req.route and len(req.route) >= 2:
-        mission = generate_from_ors_route(hub, req.route)
-    else:
-        user = tuple(req.origin)
-        dest = tuple(req.destination)
-        # Simple 4-point route between origin and destination
-        walking_route = [
-            (user[0] + (dest[0] - user[0]) * t / 3,
-             user[1] + (dest[1] - user[1]) * t / 3)
-            for t in range(4)
-        ]
-        mission = generate_all(hub, user, walking_route, dest)
-
-    # Save mission files
-    out_dir = Path("autopilot_adapter/output")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    with open(out_dir / "mission.json", "w") as f:
-        json.dump({
-            "hub_to_user": mission["hub_to_user"],
-            "track": mission["track"],
-            "home": mission["home"],
-        }, f)
-    with open(out_dir / "mission.plan", "w") as f:
-        json.dump(mission["qgc_plan"], f, indent=2)
-
-    # Start simulation (broadcasts via WebSocket)
-    all_waypoints = mission["hub_to_user"] + mission["track"] + mission["home"]
-    await manager.run_simulation(all_waypoints)
-
+    # Always return a usable route: straight line so the user can continue
+    coords = _straight_line_coords(lat1, lng1, lat2, lng2)
+    dist = wp_haversine(lat1, lng1, lat2, lng2)
     return {
-        "status": "dispatched",
-        "hub": DRONE_HUB,
-        "waypoints": {
-            "hub_to_user": len(mission["hub_to_user"]),
-            "track": len(mission["track"]),
-            "home": len(mission["home"]),
-        },
-        "routes": {
-            "hub_to_user": [[w["lat"], w["lng"]] for w in mission["hub_to_user"]],
-            "track": [[w["lat"], w["lng"]] for w in mission["track"]],
-            "home": [[w["lat"], w["lng"]] for w in mission["home"]],
-        },
+        "coords": coords,
+        "distance_m": int(dist),
+        "duration_s": int(dist / 1.2),
+        "points": len(coords),
+        "source": "fallback",
+        "detail": "Routing service busy or unavailable; showing straight line. You can still request a drone.",
     }
 
 
-# ── /api/helpstroll ────────────────────────────────────────────────────────────
-@app.post("/api/helpstroll")
-async def helpstroll(req: HelpstrollRequest):
+# ── /api/order — plan the mission (no simulation yet) ──────────────────────────
+@app.post("/api/order")
+async def order_drone(req: OrderRequest):
     """
-    Run Helpstroll distress detection on a base64 image.
+    Generate ArduPilot waypoint files for all 3 phases and broadcast to Mission Control.
+    The route from the user app (OSRM walking polyline) is used directly as escort waypoints
+    so the drone follows the exact walking route, not a straight line.
+    """
+    global _current_mission
+    hub = (DRONE_HUB["lat"], DRONE_HUB["lng"])
+
+    route_coords = req.route
+    if route_coords and len(route_coords) >= 2:
+        print(f"[order] Using {len(route_coords)} route coords from user app", flush=True)
+        mission = generate_from_osrm(hub, route_coords)
+    else:
+        print("[order] No route coords from user app, fetching from OSRM", flush=True)
+        lat1, lng1 = req.origin
+        lat2, lng2 = req.destination
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson"
+                resp = await client.get(
+                    url,
+                    headers={"User-Agent": "LouiseWalkHome/1.0"},
+                )
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("routes") and data["routes"][0]["geometry"]["coordinates"]:
+                    route_coords = data["routes"][0]["geometry"]["coordinates"]
+                    print(f"[order] Fetched {len(route_coords)} route coords from OSRM", flush=True)
+                    mission = generate_from_osrm(hub, route_coords)
+                else:
+                    raise ValueError("No route from OSRM")
+        except Exception as e:
+            print(f"[order] OSRM failed ({e}), using straight line fallback", flush=True)
+            user = tuple(req.origin)
+            dest = tuple(req.destination)
+            walking_route = [(user[0] + (dest[0]-user[0])*t/20, user[1] + (dest[1]-user[1])*t/20) for t in range(21)]
+            mission = generate_all(hub, user, walking_route, dest)
+
+    out_dir = Path("autopilot_adapter/output")
+    files = save_mission(mission, out_dir)
+
+    approach_wps = mission["approach"]
+    approach_dist = sum(
+        wp_haversine(approach_wps[i]["lat"], approach_wps[i]["lng"],
+                     approach_wps[i+1]["lat"], approach_wps[i+1]["lng"])
+        for i in range(len(approach_wps) - 1)
+    ) if len(approach_wps) > 1 else 0
+    approach_eta_s = round(approach_dist / 8)  # cruise speed 8 m/s
+
+    routes = {
+        "approach": [[w["lat"], w["lng"]] for w in mission["approach"]],
+        "escort": [[w["lat"], w["lng"]] for w in mission["escort"]],
+        "return": [[w["lat"], w["lng"]] for w in mission["return"]],
+    }
+
+    broadcast_msg = {
+        "type": "mission_update",
+        "routes": routes,
+        "stats": mission["stats"],
+        "hub": DRONE_HUB,
+        "user": mission["user"],
+        "destination": mission["destination"],
+        "approach_eta_s": approach_eta_s,
+        "files": files,
+    }
+
+    _current_mission = {
+        "mission": mission,
+        "files": files,
+        "broadcast": broadcast_msg,
+    }
+
+    await manager.broadcast(broadcast_msg)
+
+    return {
+        "status": "planned",
+        "hub": DRONE_HUB,
+        "stats": mission["stats"],
+        "approach_eta_s": approach_eta_s,
+        "files": files,
+        "routes": routes,
+    }
+
+
+# ── /api/mission/start — begin ArduPilot SITL flight ───────────────────────────
+@app.post("/api/mission/start")
+async def start_mission_endpoint():
+    """
+    Start the real ArduPilot SITL flight for the planned mission.
+    Auto-starts SITL if it's not already running (waits up to 90s).
+    The mavlink_connector uploads waypoints, arms, takes off, flies AUTO,
+    and streams real MAVLink telemetry back to all WebSocket clients.
+    """
+    if _current_mission is None:
+        raise HTTPException(status_code=400, detail="No mission planned. Call POST /api/order first.")
+
+    use_real_drone = MAV_CONNECTION is not None and MAV_CONNECTION.strip() != ""
+
+    if not use_real_drone:
+        # Start SITL if not already running
+        sitl_running = await _check_sitl_running()
+        if not sitl_running:
+            await manager.broadcast({"type": "sitl_status", "status": "starting"})
+            await sitl_start()
+            for _ in range(45):
+                await asyncio.sleep(2)
+                if await _check_sitl_running():
+                    sitl_running = True
+                    break
+            if not sitl_running:
+                raise HTTPException(status_code=503, detail="SITL did not start in time.")
+
+        # Wait for EKF warmup before flying
+        await manager.broadcast({"type": "sitl_status", "status": "warming_up"})
+        if not await _wait_for_sitl_ready(timeout=90):
+            await manager.broadcast({"type": "sitl_log", "message": "WARNING: EKF warmup timeout, proceeding anyway"})
+
+    await manager.broadcast({"type": "sitl_status", "status": "running"})
+
+    out_dir = Path("autopilot_adapter/output")
+    connector_path = Path(__file__).parent / "autopilot_adapter" / "mavlink_connector.py"
+    mission_json_path = out_dir / "mission.json"
+    connection = (MAV_CONNECTION or "").strip() or f"tcp:{SITL_HOST}:{SITL_PORT}"
+
+    if not connector_path.exists():
+        raise HTTPException(status_code=500, detail="mavlink_connector.py not found.")
+    if not mission_json_path.exists():
+        raise HTTPException(status_code=500, detail="mission.json not found. Call /api/order first.")
+
+    await manager.run_sitl_mission(connector_path, mission_json_path, connection)
+    await manager.broadcast({"type": "mission_started", "source": "ardupilot"})
+
+    mission = _current_mission["mission"]
+    total = len(mission["approach"]) + len(mission["escort"]) + len(mission["return"])
+    return {"status": "started", "source": "ardupilot", "waypoints": total}
+
+
+async def _kill_existing_sitl():
+    """Kill any running SITL and MAVProxy so next launch starts fresh at the hub."""
+    if manager.sim_task and not manager.sim_task.done():
+        manager.sim_task.cancel()
+    for name in ["arducopter", "mavproxy"]:
+        p = await asyncio.create_subprocess_exec(
+            "pkill", "-f", name,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        await p.wait()
+    global _sitl_process
+    _sitl_process = None
+    await asyncio.sleep(2)
+
+
+async def _check_sitl_running() -> bool:
+    """Check if ArduCopter SITL process is running."""
+    check_script = (
+        "import subprocess, sys; "
+        "r = subprocess.run(['pgrep', '-f', 'arducopter.*--model'], capture_output=True); "
+        "sys.exit(0 if r.returncode == 0 else 1)"
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            sys.executable, "-c", check_script,
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+            cwd=str(Path(__file__).parent),
+        )
+        await asyncio.wait_for(proc.wait(), timeout=6.0)
+        return proc.returncode == 0
+    except (asyncio.TimeoutError, Exception):
+        return False
+
+
+async def _wait_for_sitl_ready(timeout: float = 90) -> bool:
+    """Wait for SITL EKF to converge by checking MAVProxy logs."""
+    log_path = Path("autopilot_adapter/output/sitl.log")
+    start = time.time()
+    while time.time() - start < timeout:
+        if log_path.exists():
+            text = log_path.read_text()
+            if "EKF3 IMU0 is using GPS" in text and "EKF3 IMU1 is using GPS" in text:
+                return True
+        await asyncio.sleep(2)
+    return await _check_sitl_running()
+
+
+# ── /api/helpstral ────────────────────────────────────────────────────────────
+@app.post("/api/helpstral")
+async def helpstral(req: HelpstralRequest):
+    """
+    Run Helpstral distress detection on a base64 image.
     Returns {"status": "SAFE" | "DISTRESS"}.
     Falls back to SAFE if no API key set.
     """
@@ -282,7 +521,7 @@ async def helpstroll(req: HelpstrollRequest):
         ]
 
         response = client.chat.complete(
-            model=HELPSTROLL_MODEL_ID,
+            model=HELPSTRAL_MODEL_ID,
             messages=messages,
             max_tokens=10,
         )
@@ -294,11 +533,11 @@ async def helpstroll(req: HelpstrollRequest):
         return {"status": "SAFE", "error": str(e)}
 
 
-# ── /api/flystroll ─────────────────────────────────────────────────────────────
-@app.post("/api/flystroll")
-async def flystroll(req: FlystrollRequest):
+# ── /api/flystral ─────────────────────────────────────────────────────────────
+@app.post("/api/flystral")
+async def flystral(req: FlystralRequest):
     """
-    Run Flystroll vision-to-command on a base64 drone camera image.
+    Run Flystral vision-to-command on a base64 drone camera image.
     Returns {"command": "FOLLOW|0.5"} etc.
     """
     if not MISTRAL_API_KEY:
@@ -337,7 +576,7 @@ async def flystroll(req: FlystrollRequest):
         ]
 
         response = client.chat.complete(
-            model=FLYSTROLL_MODEL_ID,
+            model=FLYSTRAL_MODEL_ID,
             messages=messages,
             max_tokens=20,
         )
@@ -345,10 +584,73 @@ async def flystroll(req: FlystrollRequest):
         parts = raw.split("|")
         command = parts[0].upper() if parts else "FOLLOW"
         param = parts[1] if len(parts) > 1 else "0.5"
+
+        await manager.broadcast({"type": "flystral", "command": command, "param": param})
+
+        ref = {"lat": 0.0, "lng": 0.0, "alt": 0.0}
+        updated = parse_to_waypoint_update(command, param, ref)
+        dlat = updated.get("lat", 0.0) - ref["lat"]
+        dlng = updated.get("lng", 0.0) - ref["lng"]
+        dalt = updated.get("alt", 0.0) - ref["alt"]
+        await _send_to_connector({"type": "flystral_offset", "dlat": dlat, "dlng": dlng, "dalt": dalt})
+
         return {"command": command, "param": param, "raw": raw}
 
     except Exception as e:
         return {"command": "FOLLOW", "param": "0.5", "error": str(e)}
+
+
+# ── ArduPilot SITL control (for Mission Control UI) ─────────────────────────────
+_sitl_process: Optional[subprocess.Popen] = None
+
+
+@app.post("/api/sitl/start")
+async def sitl_start():
+    """
+    Start ArduPilot SITL in the background so Mission Control can run the live demo
+    without opening a terminal. SITL may take 30–90s to be ready; poll /api/sitl/status.
+    """
+    global _sitl_process
+    if _sitl_process is not None and _sitl_process.poll() is None:
+        return {"status": "already_running", "message": "SITL is already starting or running."}
+
+    project_root = Path(__file__).parent
+    start_script = project_root / "start_sitl.sh"
+    if not start_script.exists():
+        raise HTTPException(status_code=500, detail="start_sitl.sh not found.")
+
+    # Write SITL home from config so start_sitl.sh uses same hub as missions (Louvre)
+    out_dir = project_root / "autopilot_adapter" / "output"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    home_file = out_dir / "sitl_home.txt"
+    home_file.write_text(f"{DRONE_HUB['lat']},{DRONE_HUB['lng']},35.0,0.0")
+
+    log_path = out_dir / "sitl.log"
+    try:
+        with open(log_path, "w") as logf:
+            _sitl_process = subprocess.Popen(
+                ["/bin/bash", str(start_script)],
+                cwd=str(project_root),
+                stdin=subprocess.DEVNULL,
+                stdout=logf,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                env={**subprocess.os.environ},
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "status": "starting",
+        "message": "SITL is starting. Poll GET /api/sitl/status until running (may take 30–90s).",
+        "log_file": str(log_path),
+    }
+
+
+@app.get("/api/sitl/status")
+async def sitl_status():
+    """Return whether ArduPilot SITL is reachable on UDP 14550."""
+    return {"running": await _check_sitl_running()}
 
 
 # ── Health check ───────────────────────────────────────────────────────────────
@@ -358,8 +660,8 @@ async def health():
         "status": "ok",
         "mistral_key": bool(MISTRAL_API_KEY),
         "ors_key": bool(ORS_API_KEY),
-        "helpstroll_model": HELPSTROLL_MODEL_ID,
-        "flystroll_model": FLYSTROLL_MODEL_ID,
+        "helpstral_model": HELPSTRAL_MODEL_ID,
+        "flystral_model": FLYSTRAL_MODEL_ID,
     }
 
 

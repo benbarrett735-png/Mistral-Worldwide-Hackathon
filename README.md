@@ -1,4 +1,4 @@
-# Helpstroll & Flystroll
+# Helpstral & Flystral
 
 **AI-powered safety drone escort system for people walking alone at night.**
 
@@ -12,8 +12,8 @@ Built for the Mistral Worldwide Hackathon 2025.
 2. They set a destination — the app draws a real walking route using OpenRouteService
 3. They tap "Order drone" — a drone dispatches from the hub (Gare du Nord, Paris)
 4. The drone flies to the user, then escorts them along their route at 25m altitude
-5. **Helpstroll** (fine-tuned Pixtral 12B) watches the camera feed and detects distress
-6. **Flystroll** (fine-tuned Pixtral 12B) issues flight commands: FOLLOW, AVOID, CLIMB, REPLAN
+5. **Helpstral** (fine-tuned Pixtral 12B) watches the camera feed and detects distress
+6. **Flystral** (fine-tuned Pixtral 12B) issues flight commands: FOLLOW, AVOID, CLIMB, REPLAN
 7. If the user taps distress and doesn't dismiss in 15 seconds → emergency services alerted
 8. After arrival, the drone flies home automatically
 
@@ -27,8 +27,8 @@ User App (phone)     -->  POST /api/route      --> OpenRouteService (walking dir
                      <--> WebSocket /ws        <-- Live drone position + phase events
 
 Partner App (laptop) <--> WebSocket /ws        --> Live map, drone marker, phase badges
-                     -->  POST /api/helpstroll --> Fine-tuned Pixtral 12B (SAFE/DISTRESS)
-                                                   POST /api/flystroll --> Fine-tuned Pixtral 12B (FOLLOW|0.7 etc.)
+                     -->  POST /api/helpstral --> Fine-tuned Pixtral 12B (SAFE/DISTRESS)
+                                                   POST /api/flystral --> Fine-tuned Pixtral 12B (FOLLOW|0.7 etc.)
 
 Drone Sim            --> autopilot_adapter/mock_simulator.py
                          3 phases: hub_to_user | track | home
@@ -46,7 +46,7 @@ requirements.txt                  Python dependencies
 
 app/
   user/index.html                 User app — map, routing, distress button
-  partner/index.html              Mission control — live map, telemetry, Helpstroll, Flystroll
+  partner/index.html              Mission control — live map, telemetry, Helpstral, Flystral
 
 autopilot_adapter/
   waypoint_generator.py           Generate 3-phase waypoints from ORS route
@@ -54,16 +54,16 @@ autopilot_adapter/
   output/mission.json             Last generated mission
   output/mission.plan             QGroundControl-compatible plan
 
-helpstroll/
+helpstral/
   dataset/generate_dataset.py     Build distress/safe JSONL (--synthetic or local images)
-  dataset/helpstroll_dataset.jsonl  Training data
+  dataset/helpstral_dataset.jsonl  Training data
   train.py                        Fine-tune via Mistral API
   train_colab.ipynb               Colab notebook (no GPU needed)
   infer.py                        Inference: check_distress(image_b64) -> SAFE|DISTRESS
 
-flystroll/
+flystral/
   dataset/generate_dataset.py     Build vision-to-command JSONL
-  dataset/flystroll_dataset.jsonl  Training data
+  dataset/flystral_dataset.jsonl  Training data
   train.py                        Fine-tune via Mistral API
   infer.py                        Inference: get_command(image_b64) -> {command, param}
   command_parser.py               Parse command to waypoint adjustment
@@ -79,14 +79,17 @@ flystroll/
 pip install fastapi "uvicorn[standard]" mistralai httpx python-dotenv websockets
 ```
 
-### 2. Configure API keys
+### 2. Configure API keys and optional real drone
 
 ```bash
 cp .env.example .env
 # Edit .env and set:
 #   MISTRAL_API_KEY=your_key_here
 #   ORS_API_KEY=your_openrouteservice_key  (free at openrouteservice.org)
+# Optional: MAV_CONNECTION=tcp:IP:5760 or serial:/dev/ttyUSB0:57600 for real drone (server then skips SITL).
 ```
+
+**Map and hub:** The single source of truth for hub and map centre is `config.py` (`DRONE_HUB`, `PARIS_CENTER`). The server and user/partner apps use these via the API. The file `paris-config.ts` is an optional demo reference (e.g. for other frontends) and is not used by the main stack.
 
 ### 3. Start the server
 
@@ -105,8 +108,10 @@ uvicorn server:app --reload --port 8000
 2. Open user app on your phone (or second browser tab)
 3. Tap "Walk me home" → tap destination on Paris map
 4. Tap "Order drone" → watch drone animate across both screens
-5. See Flystroll commands appear in mission control (FOLLOW, AVOID, etc.)
+5. See Flystral commands appear in mission control (FOLLOW, AVOID, etc.)
 6. Tap "I NEED HELP" → watch 15-second countdown in user app + emergency banner in mission control
+
+**Video feed (Mission Control):** When no real drone camera stream is available, the partner app uses the placeholder image from `GET /api/test-frame` for Helpstral and Flystral so the vision APIs still run every 5s. To use a real feed, point the "Drone camera" video element at your stream URL or add an endpoint that pushes frames to the server.
 
 ---
 
@@ -115,30 +120,30 @@ uvicorn server:app --reload --port 8000
 ### Generate datasets
 
 ```bash
-# Helpstroll: distress/safe detection
-python helpstroll/dataset/generate_dataset.py --synthetic
+# Helpstral: distress/safe detection
+python helpstral/dataset/generate_dataset.py --synthetic
 
-# Flystroll: vision-to-command autopilot
-python flystroll/dataset/generate_dataset.py --synthetic
+# Flystral: vision-to-command autopilot
+python flystral/dataset/generate_dataset.py --synthetic
 ```
 
 For real training, add actual images:
 ```bash
-# Helpstroll: add images to helpstroll/dataset/images/distress/ and images/safe/
-python helpstroll/dataset/generate_dataset.py --download
+# Helpstral: add images to helpstral/dataset/images/distress/ and images/safe/
+python helpstral/dataset/generate_dataset.py --download
 
-# Flystroll: add aerial images to flystroll/dataset/images/<command>/
-python flystroll/dataset/generate_dataset.py
+# Flystral: add aerial images to flystral/dataset/images/<command>/
+python flystral/dataset/generate_dataset.py
 ```
 
 ### Fine-tune
 
 ```bash
-python helpstroll/train.py --dataset dataset/helpstroll_dataset.jsonl
-python flystroll/train.py  --dataset dataset/flystroll_dataset.jsonl
+python helpstral/train.py --dataset dataset/helpstral_dataset.jsonl
+python flystral/train.py  --dataset dataset/flystral_dataset.jsonl
 ```
 
-Or use the Colab notebook: `helpstroll/train_colab.ipynb`
+Or use the Colab notebook: `helpstral/train_colab.ipynb`
 
 After training, model IDs are automatically appended to `.env`.
 
@@ -151,16 +156,17 @@ After training, model IDs are automatically appended to `.env`.
 | `/` | GET | Redirect to user app |
 | `/api/route` | POST | `{origin, destination}` → ORS walking route |
 | `/api/order` | POST | `{origin, destination, route}` → dispatch drone |
-| `/api/helpstroll` | POST | `{image: base64}` → `{status: SAFE|DISTRESS}` |
-| `/api/flystroll` | POST | `{image: base64}` → `{command, param}` |
-| `/ws` | WebSocket | Live drone position, phase, and Flystroll events |
+| `/api/helpstral` | POST | `{image: base64}` → `{status: SAFE|DISTRESS}` |
+| `/api/flystral` | POST | `{image: base64}` → `{command, param}`; broadcasts to WS and sends offset to connector |
+| `/api/test-frame` | GET | Placeholder JPEG when no real camera feed; partner uses it for Helpstral/Flystral |
+| `/ws` | WebSocket | Live drone position, phase, Flystral, emergency |
 | `/health` | GET | System status |
 
 ---
 
 ## Pitch
 
-> *Every year, thousands of people feel unsafe walking home alone at night. Helpstroll changes that — for €3 per use, a drone can escort anyone, anywhere in the city. Two fine-tuned Mistral vision models watch over them: Helpstroll detects distress from the camera feed, Flystroll autonomously pilots the drone. The moment danger is detected, help arrives in seconds.*
+> *Every year, thousands of people feel unsafe walking home alone at night. Helpstral changes that — for €3 per use, a drone can escort anyone, anywhere in the city. Two fine-tuned Mistral vision models watch over them: Helpstral detects distress from the camera feed, Flystral autonomously pilots the drone. The moment danger is detected, help arrives in seconds.*
 
 **Why this wins:**
 - Two fine-tuned Mistral vision models with clear real-world application
