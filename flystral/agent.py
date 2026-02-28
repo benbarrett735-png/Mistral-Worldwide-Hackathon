@@ -1,7 +1,9 @@
 """
-Flystral Agent — structured flight controller with threat awareness and telemetry.
+Flystral Agent — agentic flight controller with Mistral function calling.
 
-Produces structured JSON flight commands that adapt based on Helpstral's threat assessment.
+The model decides which tools to call (get_drone_telemetry, get_threat_assessment,
+get_route_progress), receives results, reasons over them, and produces an adaptive
+flight command. Flystral adapts its behavior based on Helpstral's threat assessment.
 """
 
 from __future__ import annotations
@@ -12,30 +14,56 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import FLYSTRAL_MODEL_ID, MISTRAL_API_KEY
+from config import FLYSTRAL_MODEL_ID, MISTRAL_API_KEY, MISTRAL_VISION_MODEL
 from flystral.command_parser import VALID_COMMANDS
 
 SYSTEM_PROMPT = (
-    "You are Flystral, a drone autopilot AI for a safety escort drone. "
-    "Analyze the drone camera image with the provided telemetry and threat context.\n\n"
-    "You MUST respond with ONLY a valid JSON object (no markdown, no explanation) with these fields:\n"
-    "- scene_analysis: 1 sentence describing what you see in the image\n"
-    "- threat_context: 1 sentence about the current threat situation from Helpstral\n"
-    "- command: one of FOLLOW, AVOID_LEFT, AVOID_RIGHT, CLIMB, DESCEND, HOVER, REPLAN\n"
-    "- param: string number (speed 0.1-1.0 for FOLLOW, metres for AVOID/CLIMB/DESCEND, seconds for HOVER)\n"
-    "- reasoning: 1-2 sentence explanation of why this command\n"
-    "- altitude_adjust: integer metres to adjust altitude (-20 to +20, 0 if no change)\n"
-    "- next_check: 1 sentence about what to monitor next\n\n"
-    "CRITICAL RULES:\n"
-    "- If threat_level >= 6: reduce speed (param 0.2-0.4), decrease altitude to stay closer\n"
-    "- If threat_level >= 8 (DISTRESS): HOVER directly above user, altitude_adjust to -15\n"
-    "- If threat_level <= 3: normal FOLLOW at 0.5-0.8 speed\n"
-    "- Always consider battery — if below 20%, prioritize return\n\n"
-    "Example output:\n"
-    '{"scene_analysis": "Clear urban street, good visibility", "threat_context": "SAFE — no threats", '
-    '"command": "FOLLOW", "param": "0.6", "reasoning": "Normal conditions, maintaining standard escort.", '
-    '"altitude_adjust": 0, "next_check": "Continue routine monitoring"}'
+    "You are Flystral, a drone autopilot AI for a safety escort drone.\n\n"
+    "You have tools available. Use them to understand the situation before deciding:\n"
+    "- get_drone_telemetry: check altitude, speed, battery, heading, distance to user\n"
+    "- get_threat_assessment: get Helpstral's latest safety assessment\n"
+    "- get_route_progress: check how far along the escort route we are\n\n"
+    "CRITICAL FLIGHT RULES:\n"
+    "- If Helpstral threat_level >= 8 (DISTRESS): HOVER directly above user, altitude_adjust -15\n"
+    "- If Helpstral threat_level >= 5 (CAUTION): slow to 0.2-0.4, drop altitude to stay closer\n"
+    "- If Helpstral threat_level <= 3: normal FOLLOW at 0.5-0.8\n"
+    "- Battery <= 20%: prioritize REPLAN to return\n\n"
+    "After using tools (or if none needed), produce your final answer as JSON:\n"
+    "- scene_analysis: what you see in the image\n"
+    "- threat_context: current threat situation\n"
+    "- command: FOLLOW, AVOID_LEFT, AVOID_RIGHT, CLIMB, DESCEND, HOVER, or REPLAN\n"
+    "- param: string number (speed 0.1-1.0, metres, or seconds)\n"
+    "- reasoning: why this command\n"
+    "- altitude_adjust: integer -20 to +20\n"
+    "- next_check: what to monitor next"
 )
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_drone_telemetry",
+            "description": "Get current drone telemetry: altitude (m), ground speed (m/s), battery percentage, heading (degrees), and distance to user (m).",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_threat_assessment",
+            "description": "Get Helpstral's latest safety assessment including threat_level (1-10), status (SAFE/CAUTION/DISTRESS), observations, and pattern. Use this to adapt flight behavior to threats.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_route_progress",
+            "description": "Get escort route progress: percentage complete, estimated remaining distance, and ETA.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+]
 
 DEFAULT_RESULT = {
     "scene_analysis": "No image available",
@@ -47,42 +75,67 @@ DEFAULT_RESULT = {
     "next_check": "Await next frame",
 }
 
+# ── Shared state (set by server.py) ──────────────────────────────────────────
 
-def format_telemetry_context(
-    threat_assessment: dict | None = None,
-    telemetry: dict | None = None,
-    route_progress: float | None = None,
-) -> str:
-    """Build the text context that accompanies the image for Flystral."""
-    parts = []
+_telemetry_ref: dict = {}
+_threat_ref: dict = {}
+_route_progress_ref: float | None = None
 
-    tel = telemetry or {}
-    parts.append(
-        f"Telemetry: alt={tel.get('alt', '?')}m, speed={tel.get('ground_speed', '?')}m/s, "
-        f"battery={tel.get('battery_pct', '?')}%, heading={tel.get('heading', '?')}."
-    )
 
-    if threat_assessment:
-        tl = threat_assessment.get("threat_level", 1)
-        status = threat_assessment.get("status", "SAFE")
-        pattern = threat_assessment.get("pattern", "No pattern")
-        parts.append(
-            f'Helpstral: {{"threat_level": {tl}, "status": "{status}", "pattern": "{pattern}"}}.'
-        )
-    else:
-        parts.append("Helpstral: No assessment available.")
+def set_shared_state(telemetry: dict, threat: dict, route_progress: float | None):
+    global _telemetry_ref, _threat_ref, _route_progress_ref
+    _telemetry_ref = telemetry
+    _threat_ref = threat
+    _route_progress_ref = route_progress
 
-    if route_progress is not None:
-        parts.append(f"Route: {int(route_progress * 100)}% complete.")
 
-    if tel.get("battery_pct") is not None and isinstance(tel["battery_pct"], (int, float)) and tel["battery_pct"] <= 20:
-        parts.append("WARNING: Low battery — consider return.")
+# ── Tool implementations ─────────────────────────────────────────────────────
 
-    return " ".join(parts)
+def tool_get_drone_telemetry() -> str:
+    tel = _telemetry_ref or {}
+    return json.dumps({
+        "altitude_m": tel.get("alt", 25),
+        "ground_speed_ms": tel.get("ground_speed", 0),
+        "battery_pct": tel.get("battery_pct", 100),
+        "heading_deg": tel.get("heading", 0),
+        "distance_to_user_m": tel.get("distance_to_user", 15),
+        "phase": tel.get("phase", "unknown"),
+    })
 
+
+def tool_get_threat_assessment() -> str:
+    threat = _threat_ref or {}
+    return json.dumps({
+        "threat_level": threat.get("threat_level", 1),
+        "status": threat.get("status", "SAFE"),
+        "observations": threat.get("observations", []),
+        "pattern": threat.get("pattern", "No pattern"),
+        "reasoning": threat.get("reasoning", ""),
+        "action": threat.get("action", "CONTINUE_MONITORING"),
+    })
+
+
+def tool_get_route_progress() -> str:
+    pct = _route_progress_ref
+    if pct is None:
+        return json.dumps({"progress_pct": 0, "status": "no active route"})
+    return json.dumps({
+        "progress_pct": int(pct * 100),
+        "remaining_pct": int((1 - pct) * 100),
+        "status": "active",
+    })
+
+
+TOOL_DISPATCH = {
+    "get_drone_telemetry": lambda args: tool_get_drone_telemetry(),
+    "get_threat_assessment": lambda args: tool_get_threat_assessment(),
+    "get_route_progress": lambda args: tool_get_route_progress(),
+}
+
+
+# ── JSON parsing ──────────────────────────────────────────────────────────────
 
 def parse_structured_command(raw: str) -> dict:
-    """Parse model output as JSON. Falls back to default if parsing fails."""
     text = raw.strip()
     if text.startswith("```"):
         lines = text.split("\n")
@@ -123,6 +176,11 @@ def parse_structured_command(raw: str) -> dict:
     return result
 
 
+# ── Agent execution with tool loop ───────────────────────────────────────────
+
+MAX_TOOL_ROUNDS = 3
+
+
 def run_flystral_agent(
     image_b64: str,
     threat_assessment: dict | None = None,
@@ -130,48 +188,95 @@ def run_flystral_agent(
     route_progress: float | None = None,
 ) -> dict:
     """
-    Run the Flystral agent: image + threat + telemetry → structured flight command.
-    Returns a dict with command, param, reasoning, altitude_adjust, etc.
+    Run Flystral as a real agent: the model decides which tools to call,
+    queries drone telemetry and Helpstral's assessment, then produces
+    an adaptive flight command.
     """
+    set_shared_state(
+        telemetry or {},
+        threat_assessment or {},
+        route_progress,
+    )
+
     if not MISTRAL_API_KEY:
         result = dict(DEFAULT_RESULT)
-        if threat_assessment and threat_assessment.get("threat_level", 1) >= 8:
-            result["command"] = "HOVER"
-            result["param"] = "10"
-            result["altitude_adjust"] = -15
-            result["reasoning"] = "DISTRESS detected — hovering above user (no API key, using fallback)."
-        elif threat_assessment and threat_assessment.get("threat_level", 1) >= 5:
-            result["param"] = "0.3"
-            result["altitude_adjust"] = -5
-            result["reasoning"] = "Caution — slowing and lowering altitude (no API key, using fallback)."
+        tl = (threat_assessment or {}).get("threat_level", 1)
+        if tl >= 8:
+            result.update(command="HOVER", param="10", altitude_adjust=-15,
+                          reasoning="DISTRESS detected — hovering above user (no API key, using fallback).")
+        elif tl >= 5:
+            result.update(param="0.3", altitude_adjust=-5,
+                          reasoning="Caution — slowing and lowering altitude (no API key, using fallback).")
         result["source"] = "no_key_fallback"
+        result["tool_calls_made"] = []
         return result
 
-    context_text = format_telemetry_context(threat_assessment, telemetry, route_progress)
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                {"type": "text", "text": (
+                    "Analyze this drone camera frame. Use your tools to check telemetry, "
+                    "threat status, and route progress, then decide the next flight action as JSON."
+                )},
+            ],
+        },
+    ]
+
+    tool_calls_made = []
 
     try:
         from mistralai import Mistral
         client = Mistral(api_key=MISTRAL_API_KEY)
 
-        response = client.chat.complete(
-            model=FLYSTRAL_MODEL_ID,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                        {"type": "text", "text": f"Context: {context_text}"},
-                    ],
-                },
-            ],
-            max_tokens=500,
-            temperature=0.1,
-        )
-        raw = response.choices[0].message.content.strip()
+        model = FLYSTRAL_MODEL_ID or MISTRAL_VISION_MODEL
+
+        for _round in range(MAX_TOOL_ROUNDS + 1):
+            response = client.chat.complete(
+                model=model,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+                max_tokens=600,
+                temperature=0.1,
+            )
+
+            msg = response.choices[0].message
+
+            if not msg.tool_calls:
+                raw = (msg.content or "").strip()
+                result = parse_structured_command(raw)
+                result["timestamp"] = time.time()
+                result["tool_calls_made"] = tool_calls_made
+                return result
+
+            messages.append(msg)
+
+            for tc in msg.tool_calls:
+                fn_name = tc.function.name
+                fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                tool_calls_made.append({"tool": fn_name, "args": fn_args})
+
+                executor = TOOL_DISPATCH.get(fn_name)
+                if executor:
+                    fn_result = executor(fn_args)
+                else:
+                    fn_result = json.dumps({"error": f"Unknown tool: {fn_name}"})
+
+                messages.append({
+                    "role": "tool",
+                    "name": fn_name,
+                    "content": fn_result,
+                    "tool_call_id": tc.id,
+                })
+
+        raw = (msg.content or "").strip() if msg else ""
         result = parse_structured_command(raw)
         result["timestamp"] = time.time()
+        result["tool_calls_made"] = tool_calls_made
         return result
 
     except Exception as e:
-        return {**DEFAULT_RESULT, "error": str(e), "timestamp": time.time()}
+        return {**DEFAULT_RESULT, "error": str(e), "timestamp": time.time(), "tool_calls_made": tool_calls_made}

@@ -1,8 +1,9 @@
 """
-Helpstral Agent — structured safety monitor with memory, context, and tool use.
+Helpstral Agent — agentic safety monitor with Mistral function calling.
 
-Produces structured JSON assessments instead of binary SAFE/DISTRESS.
-Maintains a sliding window of recent assessments for pattern detection.
+The model decides which tools to call (get_location_context, get_recent_assessments,
+escalate_emergency), receives results, reasons over them, and produces a structured
+threat assessment. This is real tool use, not context stuffing.
 """
 
 from __future__ import annotations
@@ -15,28 +16,71 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import HELPSTRAL_MODEL_ID, MISTRAL_API_KEY
+from config import HELPSTRAL_MODEL_ID, MISTRAL_API_KEY, MISTRAL_VISION_MODEL
 
 SYSTEM_PROMPT = (
     "You are Helpstral, a safety AI monitoring a drone escort camera feed protecting a person "
-    "walking alone at night. Analyze the image with the provided context.\n\n"
-    "You MUST respond with ONLY a valid JSON object (no markdown, no explanation) with these fields:\n"
-    "- threat_level: integer 1-10 (1=completely safe, 5=caution, 8+=distress/danger)\n"
-    "- status: one of SAFE, CAUTION, DISTRESS\n"
-    "- observations: array of 2-4 short strings describing what you see\n"
-    "- pattern: string describing any patterns across recent assessments (or 'No pattern' if first frame)\n"
-    "- reasoning: 1-2 sentence explanation of your assessment\n"
-    "- action: one of CONTINUE_MONITORING, INCREASE_SCAN_RATE, ALERT_USER, ACTIVATE_SPOTLIGHT, EMERGENCY_HOVER\n\n"
-    "Example output:\n"
-    '{"threat_level": 2, "status": "SAFE", "observations": ["well-lit street", "no other pedestrians"], '
-    '"pattern": "Consistent safe conditions", "reasoning": "Normal urban environment with good visibility.", '
-    '"action": "CONTINUE_MONITORING"}'
+    "walking alone at night.\n\n"
+    "You have tools available. Use them to gather context before making your assessment:\n"
+    "- get_location_context: understand the area type and lighting\n"
+    "- get_recent_assessments: check your previous assessments for patterns\n"
+    "- escalate_emergency: trigger an alert if you detect real danger (threat_level >= 8)\n\n"
+    "After using tools (or if none are needed), produce your final answer as a JSON object with:\n"
+    "- threat_level: integer 1-10\n"
+    "- status: SAFE, CAUTION, or DISTRESS\n"
+    "- observations: array of 2-4 strings describing what you see\n"
+    "- pattern: string describing patterns across recent assessments\n"
+    "- reasoning: 1-2 sentence explanation\n"
+    "- action: one of CONTINUE_MONITORING, INCREASE_SCAN_RATE, ALERT_USER, ACTIVATE_SPOTLIGHT, EMERGENCY_HOVER"
 )
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_location_context",
+            "description": "Get area type, lighting estimate, and time of day for the user's current GPS position. Call this to understand the environment.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "lat": {"type": "number", "description": "Latitude of the user"},
+                    "lng": {"type": "number", "description": "Longitude of the user"},
+                },
+                "required": ["lat", "lng"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_recent_assessments",
+            "description": "Retrieve the last 3-5 threat assessments from the sliding window memory. Use this to detect patterns like someone following across multiple frames.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "escalate_emergency",
+            "description": "Trigger an emergency alert to mission control. Only call when you detect real danger (threat_level >= 8). This notifies the operator and can dispatch help.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "level": {"type": "integer", "description": "Threat level 1-10"},
+                    "reasoning": {"type": "string", "description": "Why this is an emergency"},
+                    "lat": {"type": "number", "description": "Latitude where threat detected"},
+                    "lng": {"type": "number", "description": "Longitude where threat detected"},
+                },
+                "required": ["level", "reasoning"],
+            },
+        },
+    },
+]
 
 VALID_STATUSES = {"SAFE", "CAUTION", "DISTRESS"}
 VALID_ACTIONS = {
     "CONTINUE_MONITORING", "INCREASE_SCAN_RATE", "ALERT_USER",
-    "ACTIVATE_SPOTLIGHT", "EMERGENCY_HOVER"
+    "ACTIVATE_SPOTLIGHT", "EMERGENCY_HOVER",
 }
 
 DEFAULT_ASSESSMENT = {
@@ -48,9 +92,21 @@ DEFAULT_ASSESSMENT = {
     "action": "CONTINUE_MONITORING",
 }
 
+# ── Tool implementations ─────────────────────────────────────────────────────
 
-def get_location_context(lat: float, lng: float) -> dict:
-    """Return area context for a location. In production, would query a GIS/POI API."""
+_assessment_history_ref: list[dict] = []
+_escalation_log: list[dict] = []
+_user_position_ref: dict = {}
+
+
+def set_shared_state(history: list[dict], user_pos: dict):
+    """Called by server.py to share live state with the agent."""
+    global _assessment_history_ref, _user_position_ref
+    _assessment_history_ref = history
+    _user_position_ref = user_pos
+
+
+def tool_get_location_context(lat: float, lng: float) -> str:
     hour = datetime.now().hour
     time_of_day = "night" if hour < 6 or hour >= 20 else "evening" if hour >= 17 else "day"
     lighting = "low" if time_of_day == "night" else "moderate" if time_of_day == "evening" else "good"
@@ -59,49 +115,55 @@ def get_location_context(lat: float, lng: float) -> dict:
         area_type = "central Paris — tourist area, well-lit main roads"
     elif 48.87 <= lat <= 48.89:
         area_type = "northern Paris — mixed residential and commercial"
+    elif 48.83 <= lat <= 48.85:
+        area_type = "southern Paris — quiet residential"
     else:
         area_type = "urban residential area"
 
-    return {
-        "area_type": area_type,
-        "lighting_estimate": lighting,
-        "time_of_day": time_of_day,
-        "hour": hour,
+    return json.dumps({
+        "area_type": area_type, "lighting_estimate": lighting,
+        "time_of_day": time_of_day, "hour": hour,
+    })
+
+
+def tool_get_recent_assessments() -> str:
+    recent = _assessment_history_ref[-5:] if _assessment_history_ref else []
+    summary = []
+    for a in recent:
+        summary.append({
+            "threat_level": a.get("threat_level", 1),
+            "status": a.get("status", "SAFE"),
+            "pattern": a.get("pattern", ""),
+            "action": a.get("action", ""),
+            "age_seconds": int(time.time() - a.get("timestamp", time.time())),
+        })
+    return json.dumps({"count": len(summary), "assessments": summary})
+
+
+def tool_escalate_emergency(level: int, reasoning: str, lat: float = 0, lng: float = 0) -> str:
+    entry = {
+        "level": level, "reasoning": reasoning,
+        "lat": lat, "lng": lng, "timestamp": time.time(),
     }
+    _escalation_log.append(entry)
+    return json.dumps({"status": "escalated", "alert_id": len(_escalation_log)})
 
 
-def format_context(
-    recent_assessments: list[dict],
-    location: Optional[dict] = None,
-    route_progress: Optional[float] = None,
-) -> str:
-    """Build the text context string that accompanies the image."""
-    parts = []
+TOOL_DISPATCH = {
+    "get_location_context": lambda args: tool_get_location_context(args.get("lat", 0), args.get("lng", 0)),
+    "get_recent_assessments": lambda args: tool_get_recent_assessments(),
+    "escalate_emergency": lambda args: tool_escalate_emergency(**args),
+}
 
-    loc_ctx = location or {}
-    parts.append(
-        f"Time: {loc_ctx.get('time_of_day', 'unknown')}. "
-        f"Area: {loc_ctx.get('area_type', 'unknown')}. "
-        f"Lighting: {loc_ctx.get('lighting_estimate', 'unknown')}."
-    )
 
-    if recent_assessments:
-        recent_statuses = [a.get("status", "SAFE") for a in recent_assessments[-5:]]
-        parts.append(f"Previous assessments: {recent_statuses}.")
-        last = recent_assessments[-1]
-        if last.get("threat_level", 1) >= 5:
-            parts.append(f"Last alert: threat_level={last['threat_level']}, pattern='{last.get('pattern', '')}'.")
-    else:
-        parts.append("No previous assessments (first frame).")
+def get_location_context(lat: float, lng: float) -> dict:
+    """Public helper for server.py backwards compat."""
+    return json.loads(tool_get_location_context(lat, lng))
 
-    if route_progress is not None:
-        parts.append(f"Escort progress: {int(route_progress * 100)}% complete.")
 
-    return " ".join(parts)
-
+# ── JSON parsing ──────────────────────────────────────────────────────────────
 
 def parse_structured_assessment(raw: str) -> dict:
-    """Parse model output as JSON. Falls back to default if parsing fails."""
     text = raw.strip()
     if text.startswith("```"):
         lines = text.split("\n")
@@ -136,6 +198,11 @@ def parse_structured_assessment(raw: str) -> dict:
     return result
 
 
+# ── Agent execution with tool loop ───────────────────────────────────────────
+
+MAX_TOOL_ROUNDS = 3
+
+
 def run_helpstral_agent(
     image_b64: str,
     recent_assessments: list[dict] | None = None,
@@ -143,41 +210,89 @@ def run_helpstral_agent(
     route_progress: float | None = None,
 ) -> dict:
     """
-    Run the Helpstral agent: image + context → structured threat assessment.
-    Returns a dict with threat_level, status, observations, pattern, reasoning, action.
+    Run Helpstral as a real agent: the model decides which tools to call,
+    receives results, and reasons over them before producing its assessment.
     """
     if not MISTRAL_API_KEY:
-        return {**DEFAULT_ASSESSMENT, "source": "no_key_fallback"}
+        return {**DEFAULT_ASSESSMENT, "source": "no_key_fallback", "tool_calls_made": []}
 
-    context_text = format_context(
-        recent_assessments or [],
-        location,
-        route_progress,
-    )
+    if recent_assessments is not None:
+        global _assessment_history_ref
+        _assessment_history_ref = recent_assessments
+
+    user_lat = _user_position_ref.get("lat", 48.86)
+    user_lng = _user_position_ref.get("lng", 2.34)
+
+    progress_note = ""
+    if route_progress is not None:
+        progress_note = f" Escort is {int(route_progress * 100)}% complete."
+
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                {"type": "text", "text": (
+                    f"Analyze this frame. The user is at lat={user_lat}, lng={user_lng}.{progress_note} "
+                    "Use your tools to gather context, then provide your structured threat assessment as JSON."
+                )},
+            ],
+        },
+    ]
+
+    tool_calls_made = []
 
     try:
         from mistralai import Mistral
         client = Mistral(api_key=MISTRAL_API_KEY)
 
-        response = client.chat.complete(
-            model=HELPSTRAL_MODEL_ID,
-            messages=[
-                {"role": "system", "content": SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                        {"type": "text", "text": f"Context: {context_text}"},
-                    ],
-                },
-            ],
-            max_tokens=500,
-            temperature=0.1,
-        )
-        raw = response.choices[0].message.content.strip()
+        model = HELPSTRAL_MODEL_ID or MISTRAL_VISION_MODEL
+
+        for _round in range(MAX_TOOL_ROUNDS + 1):
+            response = client.chat.complete(
+                model=model,
+                messages=messages,
+                tools=TOOLS,
+                tool_choice="auto",
+                max_tokens=600,
+                temperature=0.1,
+            )
+
+            msg = response.choices[0].message
+
+            if not msg.tool_calls:
+                raw = (msg.content or "").strip()
+                result = parse_structured_assessment(raw)
+                result["timestamp"] = time.time()
+                result["tool_calls_made"] = tool_calls_made
+                return result
+
+            messages.append(msg)
+
+            for tc in msg.tool_calls:
+                fn_name = tc.function.name
+                fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
+                tool_calls_made.append({"tool": fn_name, "args": fn_args})
+
+                executor = TOOL_DISPATCH.get(fn_name)
+                if executor:
+                    fn_result = executor(fn_args)
+                else:
+                    fn_result = json.dumps({"error": f"Unknown tool: {fn_name}"})
+
+                messages.append({
+                    "role": "tool",
+                    "name": fn_name,
+                    "content": fn_result,
+                    "tool_call_id": tc.id,
+                })
+
+        raw = (msg.content or "").strip() if msg else ""
         result = parse_structured_assessment(raw)
         result["timestamp"] = time.time()
+        result["tool_calls_made"] = tool_calls_made
         return result
 
     except Exception as e:
-        return {**DEFAULT_ASSESSMENT, "error": str(e), "timestamp": time.time()}
+        return {**DEFAULT_ASSESSMENT, "error": str(e), "timestamp": time.time(), "tool_calls_made": tool_calls_made}

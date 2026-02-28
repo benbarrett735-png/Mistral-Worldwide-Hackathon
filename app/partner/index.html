@@ -813,6 +813,13 @@
       if (fsSceneEl && fs.scene_analysis) { fsSceneEl.textContent = fs.scene_analysis; fsSceneEl.style.display = ''; }
     }
     if (tl >= 6) addLog(`Helpstral: threat=${tl} ${hs.status} — ${hs.pattern || ''}`, tl >= 8 ? 'danger' : 'warn');
+    const tools = msg.tools_used || {};
+    const hsTools = (tools.helpstral || []);
+    const fsTools = (tools.flystral || []);
+    if (hsTools.length || fsTools.length) {
+      const toolStr = [...hsTools.map(t => 'H:' + t), ...fsTools.map(t => 'F:' + t)].join(', ');
+      addLog(`Tools: ${toolStr}`, 'info');
+    }
   }
 
   function handleEmergency() {

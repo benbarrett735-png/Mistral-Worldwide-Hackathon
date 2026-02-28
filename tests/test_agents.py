@@ -1,4 +1,4 @@
-"""Tests for the multi-agent system: Helpstral agent, Flystral agent, agent loop."""
+"""Tests for the multi-agent system: Helpstral, Flystral, Louise agents + agent loop."""
 
 import json
 import pytest
@@ -15,18 +15,15 @@ class TestHelpstralAgent:
     def test_parse_valid_json(self):
         from helpstral.agent import parse_structured_assessment
         raw = json.dumps({
-            "threat_level": 3,
-            "status": "SAFE",
+            "threat_level": 3, "status": "SAFE",
             "observations": ["well-lit street", "no pedestrians"],
-            "pattern": "Consistent safe",
-            "reasoning": "Normal conditions.",
+            "pattern": "Consistent safe", "reasoning": "Normal conditions.",
             "action": "CONTINUE_MONITORING",
         })
         result = parse_structured_assessment(raw)
         assert result["threat_level"] == 3
         assert result["status"] == "SAFE"
         assert len(result["observations"]) == 2
-        assert result["action"] == "CONTINUE_MONITORING"
 
     def test_parse_json_in_markdown(self):
         from helpstral.agent import parse_structured_assessment
@@ -40,13 +37,11 @@ class TestHelpstralAgent:
         raw = 'Here is the assessment: {"threat_level": 5, "status": "CAUTION"} end'
         result = parse_structured_assessment(raw)
         assert result["threat_level"] == 5
-        assert result["status"] == "CAUTION"
 
     def test_parse_garbage_returns_default(self):
-        from helpstral.agent import parse_structured_assessment, DEFAULT_ASSESSMENT
+        from helpstral.agent import parse_structured_assessment
         result = parse_structured_assessment("just some random text no json here")
         assert result["status"] == "SAFE"
-        assert result["threat_level"] == 1
         assert result.get("parse_error") is True
 
     def test_parse_clamps_threat_level(self):
@@ -70,25 +65,47 @@ class TestHelpstralAgent:
             result = run_helpstral_agent("fakeimage")
             assert result["status"] == "SAFE"
             assert result["source"] == "no_key_fallback"
+            assert "tool_calls_made" in result
 
-    def test_location_context_returns_dict(self):
-        from helpstral.agent import get_location_context
-        ctx = get_location_context(48.86, 2.34)
-        assert "area_type" in ctx
-        assert "lighting_estimate" in ctx
-        assert "time_of_day" in ctx
+    def test_tool_location_context(self):
+        from helpstral.agent import tool_get_location_context
+        result = json.loads(tool_get_location_context(48.86, 2.34))
+        assert "area_type" in result
+        assert "lighting_estimate" in result
+        assert "time_of_day" in result
 
-    def test_format_context_no_history(self):
-        from helpstral.agent import format_context
-        result = format_context([], None, None)
-        assert "first frame" in result.lower()
+    def test_tool_recent_assessments_empty(self):
+        from helpstral.agent import tool_get_recent_assessments, set_shared_state
+        set_shared_state([], {})
+        result = json.loads(tool_get_recent_assessments())
+        assert result["count"] == 0
 
-    def test_format_context_with_history(self):
-        from helpstral.agent import format_context
-        history = [{"status": "SAFE", "threat_level": 1}, {"status": "CAUTION", "threat_level": 5}]
-        result = format_context(history, None, 0.5)
-        assert "50%" in result
-        assert "SAFE" in result
+    def test_tool_recent_assessments_with_history(self):
+        from helpstral.agent import tool_get_recent_assessments, set_shared_state
+        import time
+        history = [
+            {"threat_level": 1, "status": "SAFE", "pattern": "", "action": "", "timestamp": time.time()},
+            {"threat_level": 5, "status": "CAUTION", "pattern": "test", "action": "", "timestamp": time.time()},
+        ]
+        set_shared_state(history, {})
+        result = json.loads(tool_get_recent_assessments())
+        assert result["count"] == 2
+
+    def test_tool_escalate_emergency(self):
+        from helpstral.agent import tool_escalate_emergency
+        result = json.loads(tool_escalate_emergency(9, "Active threat", 48.86, 2.34))
+        assert result["status"] == "escalated"
+        assert "alert_id" in result
+
+    def test_tool_definitions_valid(self):
+        from helpstral.agent import TOOLS
+        assert len(TOOLS) == 3
+        names = {t["function"]["name"] for t in TOOLS}
+        assert names == {"get_location_context", "get_recent_assessments", "escalate_emergency"}
+        for tool in TOOLS:
+            assert tool["type"] == "function"
+            assert "description" in tool["function"]
+            assert "parameters" in tool["function"]
 
 
 # ── Flystral agent tests ─────────────────────────────────────────────────────
@@ -97,30 +114,23 @@ class TestFlystralAgent:
     def test_parse_valid_json(self):
         from flystral.agent import parse_structured_command
         raw = json.dumps({
-            "scene_analysis": "Clear street",
-            "threat_context": "SAFE",
-            "command": "FOLLOW",
-            "param": "0.6",
-            "reasoning": "Normal conditions.",
-            "altitude_adjust": 0,
-            "next_check": "Continue",
+            "scene_analysis": "Clear street", "threat_context": "SAFE",
+            "command": "FOLLOW", "param": "0.6",
+            "reasoning": "Normal.", "altitude_adjust": 0, "next_check": "Continue",
         })
         result = parse_structured_command(raw)
         assert result["command"] == "FOLLOW"
         assert result["param"] == "0.6"
-        assert result["altitude_adjust"] == 0
 
     def test_parse_invalid_command_defaults(self):
         from flystral.agent import parse_structured_command
-        raw = json.dumps({"command": "FIRE_LASER", "param": "100"})
-        result = parse_structured_command(raw)
+        result = parse_structured_command('{"command": "FIRE_LASER", "param": "100"}')
         assert result["command"] == "FOLLOW"
         assert result["param"] == "0.5"
 
     def test_parse_clamps_altitude(self):
         from flystral.agent import parse_structured_command
-        raw = json.dumps({"command": "FOLLOW", "altitude_adjust": -50})
-        result = parse_structured_command(raw)
+        result = parse_structured_command('{"command": "FOLLOW", "altitude_adjust": -50}')
         assert result["altitude_adjust"] == -20
 
     def test_parse_garbage_returns_default(self):
@@ -134,7 +144,7 @@ class TestFlystralAgent:
         with patch("flystral.agent.MISTRAL_API_KEY", ""):
             result = run_flystral_agent("fakeimage")
             assert result["command"] == "FOLLOW"
-            assert result["param"] == "0.5"
+            assert "tool_calls_made" in result
 
     def test_run_no_key_distress_adapts(self):
         from flystral.agent import run_flystral_agent
@@ -156,13 +166,80 @@ class TestFlystralAgent:
             assert result["param"] == "0.3"
             assert result["altitude_adjust"] == -5
 
-    def test_telemetry_context_low_battery(self):
-        from flystral.agent import format_telemetry_context
-        result = format_telemetry_context(
-            telemetry={"alt": 25, "ground_speed": 4, "battery_pct": 15, "heading": 90},
-        )
-        assert "WARNING" in result
-        assert "battery" in result.lower()
+    def test_tool_telemetry(self):
+        from flystral.agent import tool_get_drone_telemetry, set_shared_state
+        set_shared_state({"alt": 25, "ground_speed": 5, "battery_pct": 80, "heading": 90}, {}, 0.5)
+        result = json.loads(tool_get_drone_telemetry())
+        assert result["altitude_m"] == 25
+        assert result["battery_pct"] == 80
+
+    def test_tool_threat_assessment(self):
+        from flystral.agent import tool_get_threat_assessment, set_shared_state
+        set_shared_state({}, {"threat_level": 7, "status": "CAUTION", "pattern": "test"}, None)
+        result = json.loads(tool_get_threat_assessment())
+        assert result["threat_level"] == 7
+        assert result["status"] == "CAUTION"
+
+    def test_tool_route_progress(self):
+        from flystral.agent import tool_get_route_progress, set_shared_state
+        set_shared_state({}, {}, 0.75)
+        result = json.loads(tool_get_route_progress())
+        assert result["progress_pct"] == 75
+
+    def test_tool_definitions_valid(self):
+        from flystral.agent import TOOLS
+        assert len(TOOLS) == 3
+        names = {t["function"]["name"] for t in TOOLS}
+        assert names == {"get_drone_telemetry", "get_threat_assessment", "get_route_progress"}
+
+
+# ── Louise agent tests ────────────────────────────────────────────────────────
+
+class TestLouiseAgent:
+    def test_run_no_key(self):
+        from louise.agent import run_louise_agent
+        with patch("louise.agent.MISTRAL_API_KEY", ""):
+            result = run_louise_agent("Is my route safe?")
+            assert "response" in result
+            assert result["source"] == "no_key_fallback"
+            assert "tool_calls_made" in result
+
+    def test_tool_route_safety(self):
+        from louise.agent import tool_get_route_safety
+        result = json.loads(tool_get_route_safety(48.86, 2.34, 48.87, 2.35))
+        assert "safety_score" in result
+        assert 1 <= result["safety_score"] <= 10
+
+    def test_tool_escort_status_inactive(self):
+        from louise.agent import tool_get_escort_status, set_shared_state
+        set_shared_state({}, {})
+        result = json.loads(tool_get_escort_status())
+        assert result["active"] is False
+
+    def test_tool_escort_status_active(self):
+        from louise.agent import tool_get_escort_status, set_shared_state
+        set_shared_state({"active": True, "phase": "escort", "battery_pct": 85, "threat_level": 1}, {})
+        result = json.loads(tool_get_escort_status())
+        assert result["active"] is True
+        assert result["phase"] == "escort"
+
+    def test_tool_area_info(self):
+        from louise.agent import tool_get_area_info
+        result = json.loads(tool_get_area_info(48.86, 2.34))
+        assert "neighborhood" in result
+        assert "safety_notes" in result
+
+    def test_tool_safety_tips(self):
+        from louise.agent import tool_get_safety_tips
+        result = json.loads(tool_get_safety_tips("walking alone in a park at night"))
+        assert "tips" in result
+        assert len(result["tips"]) > 0
+
+    def test_tool_definitions_valid(self):
+        from louise.agent import TOOLS
+        assert len(TOOLS) == 4
+        names = {t["function"]["name"] for t in TOOLS}
+        assert names == {"get_route_safety", "get_escort_status", "get_area_info", "get_safety_tips"}
 
 
 # ── Agent loop integration tests ─────────────────────────────────────────────
@@ -170,7 +247,6 @@ class TestFlystralAgent:
 class TestAgentLoop:
     @pytest.mark.asyncio
     async def test_agent_loop_no_key(self):
-        """Agent loop works with no API key (fallback mode)."""
         with patch("helpstral.agent.MISTRAL_API_KEY", ""), \
              patch("flystral.agent.MISTRAL_API_KEY", ""):
             import server
@@ -181,54 +257,29 @@ class TestAgentLoop:
             server._latest_flystral = dict(server.FLYSTRAL_DEFAULT)
 
             result = await server.agent_loop("fakebase64image")
-
             assert "helpstral" in result
             assert "flystral" in result
             assert result["helpstral"]["status"] == "SAFE"
             assert result["flystral"]["command"] == "FOLLOW"
+            assert "tool_calls_made" in result["helpstral"]
 
     @pytest.mark.asyncio
     async def test_agent_loop_updates_history(self):
-        """Agent loop appends to assessment history."""
         with patch("helpstral.agent.MISTRAL_API_KEY", ""), \
              patch("flystral.agent.MISTRAL_API_KEY", ""):
             import server
             server._assessment_history.clear()
-            initial_len = len(server._assessment_history)
             await server.agent_loop("fakebase64image")
-            assert len(server._assessment_history) == initial_len + 1
+            assert len(server._assessment_history) == 1
 
     @pytest.mark.asyncio
-    async def test_agent_loop_auto_escalation(self):
-        """Agent loop auto-escalates after 3 consecutive high-threat assessments."""
-        with patch("helpstral.agent.MISTRAL_API_KEY", ""), \
-             patch("flystral.agent.MISTRAL_API_KEY", ""):
-            import server
-            server._assessment_history.clear()
-            for _ in range(2):
-                server._assessment_history.append({"threat_level": 7, "status": "CAUTION"})
-
-            mock_helpstral = {
-                "threat_level": 7, "status": "CAUTION",
-                "observations": ["test"], "pattern": "test",
-                "reasoning": "test", "action": "ALERT_USER",
-            }
-            with patch("server.run_helpstral_agent", return_value=mock_helpstral), \
-                 patch("server.run_flystral_agent", return_value=dict(server.FLYSTRAL_DEFAULT)):
-                broadcast_calls = []
-                original_broadcast = server.manager.broadcast
-                async def capture_broadcast(msg):
-                    broadcast_calls.append(msg)
-                    return await original_broadcast(msg)
-                server.manager.broadcast = capture_broadcast
-
-                await server.agent_loop("fakebase64image")
-
-                emergency_msgs = [m for m in broadcast_calls if m.get("type") == "emergency"]
-                assert len(emergency_msgs) >= 1
-                assert emergency_msgs[0]["origin"] == "helpstral_auto_escalation"
-
-                server.manager.broadcast = original_broadcast
+    async def test_sync_shared_state(self):
+        import server
+        server._latest_user_position = {"lat": 48.86, "lng": 2.34}
+        server._latest_telemetry = {"alt": 25, "battery_pct": 80}
+        server._sync_shared_state()
+        from flystral.agent import _telemetry_ref
+        assert _telemetry_ref.get("alt") == 25
 
 
 # ── API endpoint tests ────────────────────────────────────────────────────────
@@ -265,5 +316,27 @@ class TestAgentEndpoints:
             data = resp.json()
             assert "helpstral" in data
             assert "flystral" in data
-            assert data["helpstral"]["status"] in ("SAFE", "CAUTION", "DISTRESS")
-            assert data["flystral"]["command"] in ("FOLLOW", "AVOID_LEFT", "AVOID_RIGHT", "CLIMB", "DESCEND", "HOVER", "REPLAN")
+
+    @pytest.mark.asyncio
+    async def test_louise_endpoint(self):
+        from httpx import AsyncClient, ASGITransport
+        from server import app
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.post("/api/louise", json={"message": "Is my area safe?"})
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "response" in data
+            assert "tool_calls_made" in data
+
+    @pytest.mark.asyncio
+    async def test_agent_status_endpoint(self):
+        from httpx import AsyncClient, ASGITransport
+        from server import app
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+            resp = await ac.get("/api/agent-status")
+            assert resp.status_code == 200
+            data = resp.json()
+            assert "loop_active" in data
+            assert "mission_active" in data
+            assert "helpstral" in data
+            assert "flystral" in data

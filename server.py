@@ -43,8 +43,15 @@ from config import (
 )
 from autopilot_adapter.waypoint_generator import generate_from_osrm, generate_all, save_mission, haversine as wp_haversine
 from flystral.command_parser import VALID_COMMANDS as FLYSTRAL_VALID_COMMANDS, parse_to_waypoint_update
-from helpstral.agent import run_helpstral_agent, get_location_context, DEFAULT_ASSESSMENT as HELPSTRAL_DEFAULT
-from flystral.agent import run_flystral_agent, DEFAULT_RESULT as FLYSTRAL_DEFAULT
+from helpstral.agent import (
+    run_helpstral_agent, get_location_context, DEFAULT_ASSESSMENT as HELPSTRAL_DEFAULT,
+    set_shared_state as helpstral_set_state,
+)
+from flystral.agent import (
+    run_flystral_agent, DEFAULT_RESULT as FLYSTRAL_DEFAULT,
+    set_shared_state as flystral_set_state,
+)
+from louise.agent import run_louise_agent, set_shared_state as louise_set_state
 
 app = FastAPI(title="Louise API")
 
@@ -109,6 +116,7 @@ class ConnectionManager:
         async def stream_connector():
                 global _mission_in_progress
                 _mission_in_progress = True
+                start_autonomous_agent_loop()
                 # Kill MAVProxy so connector can connect to TCP 5760 directly
                 # SITL stays running with warm EKF
                 kill_proxy = await asyncio.create_subprocess_exec(
@@ -167,6 +175,7 @@ class ConnectionManager:
                 finally:
                     manager.connector_proc = None
                     _mission_in_progress = False
+                    stop_autonomous_agent_loop()
                     if last_event and last_event.get("type") != "complete":
                         await self.broadcast({"type": "connector_died", "source": "ardupilot"})
                         await self.broadcast({"type": "complete", "source": "ardupilot"})
@@ -187,18 +196,9 @@ _latest_user_position: dict = {}
 _ASSESSMENT_WINDOW = 10
 
 
-async def agent_loop(frame_b64: str) -> dict:
-    """
-    Core multi-agent loop: Helpstral assesses → Flystral decides → execute + broadcast.
-    Called every time a frame is available (from partner camera or test-frame).
-    """
-    global _latest_helpstral, _latest_flystral
-
-    user_pos = _latest_user_position
-    location_ctx = get_location_context(
-        user_pos.get("lat", DRONE_HUB["lat"]),
-        user_pos.get("lng", DRONE_HUB["lng"]),
-    ) if user_pos else None
+def _sync_shared_state():
+    """Push latest server state into agent modules so their tools return live data."""
+    helpstral_set_state(_assessment_history, _latest_user_position)
 
     mission = _current_mission.get("mission") if _current_mission else None
     route_progress = None
@@ -206,12 +206,35 @@ async def agent_loop(frame_b64: str) -> dict:
         total = mission["stats"].get("total_waypoints", 1)
         route_progress = _latest_telemetry.get("waypoint_index", 0) / max(1, total)
 
+    flystral_set_state(_latest_telemetry, _latest_helpstral, route_progress)
+    louise_set_state(
+        {
+            "active": _mission_in_progress,
+            "phase": _latest_telemetry.get("phase", "idle"),
+            "battery_pct": _latest_telemetry.get("battery_pct"),
+            "distance_to_user": _latest_telemetry.get("distance_to_user"),
+            "threat_level": _latest_helpstral.get("threat_level", 1),
+        },
+        _latest_user_position,
+    )
+    return route_progress
+
+
+async def agent_loop(frame_b64: str) -> dict:
+    """
+    Core multi-agent loop: Helpstral assesses (with tool calling) →
+    Flystral decides (with tool calling) → execute + broadcast.
+    Both agents use Mistral function calling to query live state.
+    """
+    global _latest_helpstral, _latest_flystral
+
+    route_progress = _sync_shared_state()
+
     helpstral_result = await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: run_helpstral_agent(
             image_b64=frame_b64,
             recent_assessments=_assessment_history[-5:],
-            location=location_ctx,
             route_progress=route_progress,
         ),
     )
@@ -219,6 +242,8 @@ async def agent_loop(frame_b64: str) -> dict:
     _assessment_history.append(helpstral_result)
     while len(_assessment_history) > _ASSESSMENT_WINDOW:
         _assessment_history.pop(0)
+
+    _sync_shared_state()
 
     flystral_result = await asyncio.get_event_loop().run_in_executor(
         None,
@@ -243,10 +268,16 @@ async def agent_loop(frame_b64: str) -> dict:
         dalt = updated.get("alt", 0.0) - ref["alt"] + alt_adjust
         await _send_to_connector({"type": "flystral_offset", "dlat": dlat, "dlng": dlng, "dalt": dalt})
 
+    hs_tools = helpstral_result.get("tool_calls_made", [])
+    fs_tools = flystral_result.get("tool_calls_made", [])
     await manager.broadcast({
         "type": "agent_update",
         "helpstral": helpstral_result,
         "flystral": flystral_result,
+        "tools_used": {
+            "helpstral": [t["tool"] for t in hs_tools],
+            "flystral": [t["tool"] for t in fs_tools],
+        },
     })
 
     recent_high_threats = [
@@ -263,6 +294,47 @@ async def agent_loop(frame_b64: str) -> dict:
         })
 
     return {"helpstral": helpstral_result, "flystral": flystral_result}
+
+
+# ── Autonomous agent background loop ────────────────────────────────────────
+_agent_loop_task: asyncio.Task | None = None
+AGENT_LOOP_INTERVAL_S = 5
+
+
+async def _autonomous_agent_loop():
+    """
+    Runs continuously while a mission is active. Every AGENT_LOOP_INTERVAL_S seconds,
+    fetches a frame (from test-frame or camera) and runs the full agent loop.
+    """
+    _log_event("autonomous_agent_loop", status="started")
+    try:
+        while _mission_in_progress:
+            try:
+                frame_b64 = _TEST_FRAME_B64
+                await agent_loop(frame_b64)
+            except Exception as e:
+                _log_event("agent_loop_error", error=str(e))
+            await asyncio.sleep(AGENT_LOOP_INTERVAL_S)
+    except asyncio.CancelledError:
+        pass
+    finally:
+        _log_event("autonomous_agent_loop", status="stopped")
+
+
+def start_autonomous_agent_loop():
+    """Start the background agent loop (called when mission starts)."""
+    global _agent_loop_task
+    if _agent_loop_task and not _agent_loop_task.done():
+        return
+    _agent_loop_task = asyncio.create_task(_autonomous_agent_loop())
+
+
+def stop_autonomous_agent_loop():
+    """Stop the background agent loop (called when mission ends)."""
+    global _agent_loop_task
+    if _agent_loop_task and not _agent_loop_task.done():
+        _agent_loop_task.cancel()
+    _agent_loop_task = None
 
 
 def _in_bounds(lat: float, lng: float) -> bool:
@@ -342,6 +414,11 @@ class HelpstralRequest(BaseModel):
 
 class FlystralRequest(BaseModel):
     image: str  # base64-encoded image
+
+
+class LouiseRequest(BaseModel):
+    message: str
+    conversation: list[dict] = []
 
 
 @app.get("/api/config")
@@ -732,6 +809,34 @@ async def run_agent_loop(req: HelpstralRequest):
     Returns both agent results. Used by partner app for coordinated AI cycle.
     """
     return await agent_loop(req.image)
+
+
+# ── /api/louise — Ask Louise conversational agent ─────────────────────────────
+@app.post("/api/louise")
+async def ask_louise(req: LouiseRequest):
+    """
+    Ask Louise: user-facing conversational AI with tool calling.
+    Louise can query route safety, escort status, area info, and safety tips.
+    """
+    _sync_shared_state()
+    result = await asyncio.get_event_loop().run_in_executor(
+        None,
+        lambda: run_louise_agent(req.message, req.conversation),
+    )
+    return result
+
+
+# ── /api/agent-status — what the agents are doing right now ───────────────────
+@app.get("/api/agent-status")
+async def agent_status():
+    """Return current agent state: latest assessments, tools used, loop active."""
+    return {
+        "loop_active": _agent_loop_task is not None and not _agent_loop_task.done(),
+        "mission_active": _mission_in_progress,
+        "helpstral": _latest_helpstral,
+        "flystral": _latest_flystral,
+        "assessment_history_size": len(_assessment_history),
+    }
 
 
 # ── ArduPilot SITL control (for Mission Control UI) ─────────────────────────────
