@@ -44,7 +44,15 @@ def _store(key: str, data: dict) -> dict:
 
 # ── Overpass queries ──────────────────────────────────────────────────────────
 
+_last_overpass_time = 0.0
+
 def _overpass_query(query: str) -> dict | None:
+    global _last_overpass_time
+    # Rate limit: 1 request per second for public Overpass
+    elapsed = time.time() - _last_overpass_time
+    if elapsed < 1.0:
+        time.sleep(1.0 - elapsed)
+    _last_overpass_time = time.time()
     try:
         resp = httpx.post(OVERPASS_URL, data={"data": query}, timeout=REQUEST_TIMEOUT,
                           headers={"User-Agent": USER_AGENT})
@@ -285,20 +293,34 @@ def compute_area_safety_score(lat: float, lng: float) -> dict:
     return _store(cache_key, result)
 
 
-def compute_route_safety(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> dict:
+def compute_route_safety(from_lat: float, from_lng: float, to_lat: float, to_lng: float,
+                         route_coords: list[tuple[float, float]] | None = None) -> dict:
     """
     Score a route by sampling points along it and averaging safety scores.
-    Identifies the weakest segment.
+    Adapts sample count to route length. If route_coords provided, samples along
+    the actual walking path instead of a straight line.
     """
-    n_samples = 5
+    dist_km = _haversine(from_lat, from_lng, to_lat, to_lng)
+    n_samples = max(5, min(12, int(dist_km * 3)))  # ~3 samples per km, 5-12 range
+
     samples = []
     worst_segment = None
     worst_score = 11
 
-    for i in range(n_samples):
-        t = i / max(1, n_samples - 1)
-        lat = from_lat + (to_lat - from_lat) * t
-        lng = from_lng + (to_lng - from_lng) * t
+    # If route coords provided, sample along actual route geometry
+    if route_coords and len(route_coords) >= 2:
+        step = max(1, len(route_coords) // n_samples)
+        sample_points = [route_coords[i] for i in range(0, len(route_coords), step)]
+        if route_coords[-1] not in sample_points:
+            sample_points.append(route_coords[-1])
+    else:
+        sample_points = [
+            (from_lat + (to_lat - from_lat) * (i / max(1, n_samples - 1)),
+             from_lng + (to_lng - from_lng) * (i / max(1, n_samples - 1)))
+            for i in range(n_samples)
+        ]
+
+    for i, (lat, lng) in enumerate(sample_points):
         score_data = compute_area_safety_score(lat, lng)
         s = score_data["safety_score"]
         samples.append({
@@ -307,28 +329,56 @@ def compute_route_safety(from_lat: float, from_lng: float, to_lat: float, to_lng
             "score": s,
             "neighborhood": score_data["neighborhood"],
             "lighting": score_data["lighting_quality"],
+            "foot_traffic": score_data["foot_traffic_level"],
+            "streetlights": score_data["streetlights_nearby"],
         })
         if s < worst_score:
             worst_score = s
             worst_segment = samples[-1]
 
-    avg_score = round(sum(s["score"] for s in samples) / len(samples))
-    dist_km = _haversine(from_lat, from_lng, to_lat, to_lng)
-    walk_minutes = int(dist_km * 1000 / 80)  # ~80m/min walking
+    # Distance-weighted average: give more weight to longer unsafe segments
+    if len(samples) >= 2:
+        total_weight = 0
+        weighted_sum = 0
+        for j in range(len(samples)):
+            if j < len(samples) - 1:
+                seg_dist = _haversine(samples[j]["lat"], samples[j]["lng"],
+                                      samples[j+1]["lat"], samples[j+1]["lng"])
+            else:
+                seg_dist = 0.1
+            weight = max(0.1, seg_dist)
+            weighted_sum += samples[j]["score"] * weight
+            total_weight += weight
+        avg_score = round(weighted_sum / max(0.01, total_weight))
+    else:
+        avg_score = samples[0]["score"] if samples else 5
+
+    walk_minutes = int(dist_km * 1000 / 80)
+
+    # Count segments below threshold
+    danger_segments = [s for s in samples if s["score"] <= 3]
+    caution_segments = [s for s in samples if 3 < s["score"] <= 5]
+
+    if avg_score >= 7:
+        rec = "Route appears safe for walking — well-lit with good foot traffic"
+    elif avg_score >= 5:
+        rec = f"Route is moderately safe but has {len(caution_segments)} segment(s) with limited lighting"
+        if danger_segments:
+            rec += f" and {len(danger_segments)} poorly-lit area(s)"
+        rec += " — a drone escort is recommended"
+    else:
+        rec = f"This route has {len(danger_segments)} segment(s) with poor lighting and low foot traffic — drone escort strongly recommended"
 
     return {
         "overall_safety_score": max(1, min(10, avg_score)),
         "distance_km": round(dist_km, 2),
         "estimated_walk_minutes": walk_minutes,
+        "segments_sampled": len(samples),
         "segments": samples,
         "weakest_segment": worst_segment,
-        "recommendation": (
-            "Route appears safe for walking"
-            if avg_score >= 6
-            else "Some segments have limited lighting — consider a drone escort"
-            if avg_score >= 4
-            else "This route has poor lighting and low foot traffic — drone escort recommended"
-        ),
+        "danger_segments": len(danger_segments),
+        "caution_segments": len(caution_segments),
+        "recommendation": rec,
     }
 
 

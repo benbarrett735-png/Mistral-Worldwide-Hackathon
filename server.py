@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+import os
 import subprocess
 import sys
 import time
@@ -96,14 +97,18 @@ class ConnectionManager:
             self.connections.remove(ws)
 
     async def broadcast(self, data: dict):
-        dead = []
-        for ws in self.connections:
+        if not self.connections:
+            return
+        async def _safe_send(ws):
             try:
-                await ws.send_json(data)
+                await asyncio.wait_for(ws.send_json(data), timeout=5.0)
+                return None
             except Exception:
-                dead.append(ws)
-        for ws in dead:
-            self.disconnect(ws)
+                return ws
+        results = await asyncio.gather(*[_safe_send(ws) for ws in self.connections])
+        for ws in results:
+            if ws is not None:
+                self.disconnect(ws)
 
     async def run_sitl_mission(self, connector_path: Path, mission_json: Path, connection: str):
         """
@@ -150,6 +155,48 @@ class ConnectionManager:
 
                 asyncio.create_task(relay_stderr())
 
+                # Feed demo user positions (escort waypoints at walking speed)
+                # so SITL's live_follow_loop has positions to track
+                async def feed_demo_positions():
+                    await asyncio.sleep(5)  # wait for approach to start
+                    mission_data = _current_mission.get("mission", {}) if _current_mission else {}
+                    escort_wps = mission_data.get("escort", [])
+                    if not escort_wps:
+                        return
+                    # Wait until approach is done (phase changes to escort)
+                    for _ in range(300):  # max 5 min wait
+                        if _latest_telemetry.get("phase") == "escort":
+                            break
+                        await asyncio.sleep(1)
+                    else:
+                        return
+
+                    WALK_SPEED = 1.4  # m/s
+                    for i, wp in enumerate(escort_wps):
+                        if proc.returncode is not None:
+                            return
+                        msg = json.dumps({"type": "user_position", "lat": wp["lat"], "lng": wp["lng"]}) + "\n"
+                        try:
+                            proc.stdin.write(msg.encode())
+                            await proc.stdin.drain()
+                        except (BrokenPipeError, OSError):
+                            return
+                        await self.broadcast({"type": "user_position", "lat": wp["lat"], "lng": wp["lng"], "source": "demo"})
+
+                        if i + 1 < len(escort_wps):
+                            seg_dist = wp_haversine(wp["lat"], wp["lng"], escort_wps[i+1]["lat"], escort_wps[i+1]["lng"])
+                            delay = max(1.0, min(seg_dist / WALK_SPEED, 5.0))
+                            await asyncio.sleep(delay)
+
+                    # Signal return phase
+                    try:
+                        proc.stdin.write((json.dumps({"type": "phase", "phase": "return"}) + "\n").encode())
+                        await proc.stdin.drain()
+                    except (BrokenPipeError, OSError):
+                        pass
+
+                asyncio.create_task(feed_demo_positions())
+
                 last_event = None
                 try:
                     while proc.stdout:
@@ -185,7 +232,14 @@ class ConnectionManager:
 
 manager = ConnectionManager()
 _current_mission: dict | None = None
-_mission_in_progress: bool = False  # True while connector subprocess is running
+_mission_in_progress: bool = False
+_mission_lock = asyncio.Lock()
+
+def _http_client(**kwargs) -> httpx.AsyncClient:
+    """Reusable HTTP client with sensible defaults."""
+    defaults = {"timeout": 15, "headers": {"User-Agent": "LouiseWalkHome/1.0"}}
+    defaults.update(kwargs)
+    return httpx.AsyncClient(**defaults)
 
 # ── Agent state (multi-agent loop) ─────────────────────────────────────────────
 _assessment_history: list[dict] = []  # sliding window of Helpstral assessments
@@ -408,6 +462,30 @@ class OrderRequest(BaseModel):
     route: Optional[list[list[float]]] = None  # ORS polyline coords [[lng, lat], ...]
 
 
+class EmergencyRequest(BaseModel):
+    lat: Optional[float] = None
+    lng: Optional[float] = None
+    origin: Optional[list[float]] = None
+    reasoning: Optional[str] = None
+
+
+@app.post("/api/emergency")
+async def emergency_http(req: EmergencyRequest):
+    """HTTP fallback for emergency alerts (when WebSocket is down)."""
+    lat = req.lat or (req.origin[0] if req.origin else None)
+    lng = req.lng or (req.origin[1] if req.origin else None)
+    payload = {
+        "type": "emergency",
+        "lat": lat, "lng": lng,
+        "reasoning": req.reasoning or "User triggered emergency",
+        "source": "http_fallback",
+        "timestamp": time.time(),
+    }
+    await manager.broadcast(payload)
+    _log_event("emergency", lat=lat, lng=lng, source="http")
+    return {"status": "emergency_sent", "message": "Alert broadcast to all connected stations"}
+
+
 class HelpstralRequest(BaseModel):
     image: str  # base64-encoded image
 
@@ -436,19 +514,47 @@ async def get_config():
 
 @app.post("/api/estimate")
 async def get_estimate(req: RouteRequest):
-    """Return distance (km) and price estimate for a route. Used by user app before ordering."""
+    """Return distance (km) and price estimate using OSRM walking route distance (not straight-line)."""
     lat1, lng1 = req.origin
     lat2, lng2 = req.destination
     if not _in_bounds(lat1, lng1) or not _in_bounds(lat2, lng2):
         raise HTTPException(status_code=400, detail="Origin or destination outside service area.")
-    distance_m = wp_haversine(lat1, lng1, lat2, lng2)
-    distance_km = round(distance_m / 1000.0, 2)
-    estimate_eur = round(BASE_PRICE_EUR + distance_km * PRICE_PER_KM_EUR, 2)
+
+    # Use real walking route distance from OSRM, fall back to straight-line
+    route_distance_m = None
+    try:
+        async with _http_client() as client:
+            url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=false"
+            resp = await client.get(url, headers={"User-Agent": "LouiseWalkHome/1.0"})
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("routes"):
+                route_distance_m = data["routes"][0].get("distance")
+    except Exception:
+        pass
+
+    if route_distance_m is None:
+        route_distance_m = wp_haversine(lat1, lng1, lat2, lng2)
+
+    # Hub approach + return distances (straight-line, as drone flies)
+    hub_lat, hub_lng = DRONE_HUB["lat"], DRONE_HUB["lng"]
+    approach_m = wp_haversine(hub_lat, hub_lng, lat1, lng1)
+    return_m = wp_haversine(lat2, lng2, hub_lat, hub_lng)
+    total_flight_m = approach_m + route_distance_m + return_m
+
+    distance_km = round(route_distance_m / 1000.0, 2)
+    distance_price = round(distance_km * PRICE_PER_KM_EUR, 2)
+    total_eur = round(BASE_PRICE_EUR + distance_price, 2)
+
     return {
         "distance_km": distance_km,
-        "distance_m": int(distance_m),
-        "estimate_eur": estimate_eur,
+        "distance_m": int(route_distance_m),
+        "estimate_eur": total_eur,
+        "base_price_eur": BASE_PRICE_EUR,
+        "distance_price_eur": distance_price,
+        "total_flight_distance_m": int(total_flight_m),
         "currency": CURRENCY,
+        "pricing_note": f"Base fee {CURRENCY} {BASE_PRICE_EUR:.2f} + {CURRENCY} {PRICE_PER_KM_EUR:.2f}/km walking distance",
     }
 
 
@@ -474,46 +580,65 @@ def _straight_line_coords(lat1: float, lng1: float, lat2: float, lng2: float, nu
     ]
 
 
+_route_cache: dict[str, dict] = {}
+
+def _price_from_distance(distance_m: float, origin: tuple, dest: tuple) -> dict:
+    """Compute pricing from route distance."""
+    distance_km = round(distance_m / 1000.0, 2)
+    distance_price = round(distance_km * PRICE_PER_KM_EUR, 2)
+    total_eur = round(BASE_PRICE_EUR + distance_price, 2)
+    sym = "\u20AC" if CURRENCY == "EUR" else CURRENCY
+    return {
+        "estimate_eur": total_eur,
+        "base_price_eur": BASE_PRICE_EUR,
+        "distance_price_eur": distance_price,
+        "distance_km": distance_km,
+        "currency": CURRENCY,
+        "pricing_note": f"Base {sym}{BASE_PRICE_EUR:.2f} + {sym}{PRICE_PER_KM_EUR:.2f}/km x {distance_km}km",
+    }
+
+
 @app.post("/api/route")
 async def get_route(req: RouteRequest):
     """
-    Get a walking route via OSRM (free), then ORS if key set, then straight-line fallback.
-    Returns coords as [[lng, lat], ...]. Always returns coords so the user can proceed.
-    If origin or destination is outside geofence, returns 400.
+    Get a walking route + pricing in one call (OSRM, ORS fallback, straight-line fallback).
+    Returns coords as [[lng, lat], ...] plus price estimate. Always returns coords.
     """
     lat1, lng1 = req.origin
     lat2, lng2 = req.destination
     if not _in_bounds(lat1, lng1) or not _in_bounds(lat2, lng2):
         raise HTTPException(status_code=400, detail="Origin or destination is outside the service area.")
 
-    # Primary: OSRM public server (1 req/sec limit; use User-Agent)
+    cache_key = f"{lat1:.5f},{lng1:.5f}-{lat2:.5f},{lng2:.5f}"
+    if cache_key in _route_cache:
+        return _route_cache[cache_key]
+
+    result = None
     try:
-        async with httpx.AsyncClient(timeout=15) as client:
+        async with _http_client() as client:
             url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson"
-            resp = await client.get(
-                url,
-                headers={"User-Agent": "LouiseWalkHome/1.0 (safety escort demo)"},
-            )
+            resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
             if data.get("routes") and len(data["routes"]) > 0:
                 route = data["routes"][0]
                 coords = route["geometry"]["coordinates"]
                 if coords and len(coords) >= 2:
-                    return {
+                    dist_m = route.get("distance") or wp_haversine(lat1, lng1, lat2, lng2)
+                    result = {
                         "coords": coords,
                         "distance_m": route.get("distance"),
                         "duration_s": route.get("duration"),
                         "points": len(coords),
                         "source": "osrm",
+                        "price": _price_from_distance(dist_m, req.origin, req.destination),
                     }
     except Exception:
         pass
 
-    # Fallback: ORS (needs API key)
-    if ORS_API_KEY:
+    if result is None and ORS_API_KEY:
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with _http_client() as client:
                 resp = await client.post(
                     f"{ORS_BASE_URL}/directions/foot-walking/geojson",
                     headers={"Authorization": ORS_API_KEY, "Content-Type": "application/json"},
@@ -524,21 +649,34 @@ async def get_route(req: RouteRequest):
                 if data.get("features") and len(data["features"]) > 0:
                     coords = data["features"][0]["geometry"]["coordinates"]
                     if coords:
-                        return {"coords": coords, "source": "ors", "points": len(coords)}
+                        dist_m = wp_haversine(lat1, lng1, lat2, lng2)
+                        result = {
+                            "coords": coords,
+                            "source": "ors",
+                            "points": len(coords),
+                            "price": _price_from_distance(dist_m, req.origin, req.destination),
+                        }
         except Exception:
             pass
 
-    # Always return a usable route: straight line so the user can continue
-    coords = _straight_line_coords(lat1, lng1, lat2, lng2)
-    dist = wp_haversine(lat1, lng1, lat2, lng2)
-    return {
-        "coords": coords,
-        "distance_m": int(dist),
-        "duration_s": int(dist / 1.2),
-        "points": len(coords),
-        "source": "fallback",
-        "detail": "Routing service busy or unavailable; showing straight line. You can still request a drone.",
-    }
+    if result is None:
+        coords = _straight_line_coords(lat1, lng1, lat2, lng2)
+        dist = wp_haversine(lat1, lng1, lat2, lng2)
+        result = {
+            "coords": coords,
+            "distance_m": int(dist),
+            "duration_s": int(dist / 1.2),
+            "points": len(coords),
+            "source": "fallback",
+            "detail": "Routing service busy; showing straight line. You can still request a drone.",
+            "price": _price_from_distance(dist, req.origin, req.destination),
+        }
+
+    _route_cache[cache_key] = result
+    if len(_route_cache) > 100:
+        oldest = next(iter(_route_cache))
+        del _route_cache[oldest]
+    return result
 
 
 # ── /api/order — plan the mission (no simulation yet) ──────────────────────────
@@ -550,9 +688,10 @@ async def order_drone(req: OrderRequest):
     so the drone follows the exact walking route, not a straight line.
     Returns 409 if a mission is already in progress (connector running).
     """
-    global _current_mission
-    if _mission_in_progress:
-        raise HTTPException(status_code=409, detail="A mission is already in progress. Wait for it to finish or reconnect.")
+    global _current_mission, _mission_in_progress
+    async with _mission_lock:
+        if _mission_in_progress:
+            await _force_cancel_mission()
     hub = (DRONE_HUB["lat"], DRONE_HUB["lng"])
     lat1, lng1 = req.origin
     lat2, lng2 = req.destination
@@ -568,12 +707,9 @@ async def order_drone(req: OrderRequest):
         lat1, lng1 = req.origin
         lat2, lng2 = req.destination
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with _http_client() as client:
                 url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson"
-                resp = await client.get(
-                    url,
-                    headers={"User-Agent": "LouiseWalkHome/1.0"},
-                )
+                resp = await client.get(url)
                 resp.raise_for_status()
                 data = resp.json()
                 if data.get("routes") and data["routes"][0]["geometry"]["coordinates"]:
@@ -598,7 +734,7 @@ async def order_drone(req: OrderRequest):
                      approach_wps[i+1]["lat"], approach_wps[i+1]["lng"])
         for i in range(len(approach_wps) - 1)
     ) if len(approach_wps) > 1 else 0
-    approach_eta_s = round(approach_dist / 8)  # cruise speed 8 m/s
+    approach_eta_s = round(approach_dist / 50)  # approach at 50 m/s
 
     routes = {
         "approach": [[w["lat"], w["lng"]] for w in mission["approach"]],
@@ -623,8 +759,23 @@ async def order_drone(req: OrderRequest):
         "broadcast": broadcast_msg,
     }
 
+    await manager.broadcast({
+        "type": "position",
+        "lat": DRONE_HUB["lat"], "lng": DRONE_HUB["lng"], "alt": 0,
+        "phase": "idle", "source": "hub_reset",
+    })
     await manager.broadcast(broadcast_msg)
     _log_event("mission_planned", waypoints=mission["stats"].get("total_waypoints"), hub_lat=DRONE_HUB["lat"])
+
+    # Calculate accurate price from mission waypoint distances
+    escort_wps = mission["escort"]
+    escort_dist = sum(
+        wp_haversine(escort_wps[i]["lat"], escort_wps[i]["lng"],
+                     escort_wps[i+1]["lat"], escort_wps[i+1]["lng"])
+        for i in range(len(escort_wps) - 1)
+    ) if len(escort_wps) > 1 else 0
+    escort_km = round(escort_dist / 1000.0, 2)
+    price_eur = round(BASE_PRICE_EUR + escort_km * PRICE_PER_KM_EUR, 2)
 
     return {
         "status": "planned",
@@ -633,44 +784,54 @@ async def order_drone(req: OrderRequest):
         "approach_eta_s": approach_eta_s,
         "files": files,
         "routes": routes,
+        "price": {
+            "total_eur": price_eur,
+            "base_eur": BASE_PRICE_EUR,
+            "distance_eur": round(escort_km * PRICE_PER_KM_EUR, 2),
+            "escort_distance_km": escort_km,
+            "currency": CURRENCY,
+        },
     }
 
 
-# ── /api/mission/start — begin ArduPilot SITL flight ───────────────────────────
+# ── /api/mission/start — begin flight (ArduPilot SITL always, mock fallback) ──
 @app.post("/api/mission/start")
 async def start_mission_endpoint():
     """
-    Start the real ArduPilot SITL flight for the planned mission.
-    Auto-starts SITL if it's not already running (waits up to 90s).
-    The mavlink_connector uploads waypoints, arms, takes off, flies AUTO,
-    and streams real MAVLink telemetry back to all WebSocket clients.
+    Start the mission flight. Always uses ArduPilot SITL.
+    - If MAV_CONNECTION is set: uses real drone hardware directly
+    - Otherwise: starts ArduPilot SITL if not already running
+    - Falls back to mock simulator only if ArduCopter binary not found
     """
     if _current_mission is None:
         raise HTTPException(status_code=400, detail="No mission planned. Call POST /api/order first.")
 
     use_real_drone = MAV_CONNECTION is not None and MAV_CONNECTION.strip() != ""
 
+    # Always try ArduPilot — start SITL if it's not running
     if not use_real_drone:
-        # Start SITL if not already running
         sitl_running = await _check_sitl_running()
         if not sitl_running:
-            await manager.broadcast({"type": "sitl_status", "status": "starting"})
-            await sitl_start()
-            for _ in range(45):
-                await asyncio.sleep(2)
-                if await _check_sitl_running():
-                    sitl_running = True
-                    break
-            if not sitl_running:
-                raise HTTPException(status_code=503, detail="SITL did not start in time.")
+            try:
+                await manager.broadcast({"type": "sitl_status", "status": "starting"})
+                await sitl_start()
+                for _ in range(20):
+                    await asyncio.sleep(2)
+                    if await _check_sitl_running():
+                        sitl_running = True
+                        break
+            except Exception as e:
+                _log_event("sitl_start_failed", error=str(e))
 
-        # Wait for EKF warmup before flying
+            if not sitl_running:
+                _log_event("sitl_fallback_to_mock")
+                return await _start_mock_mission()
+
         await manager.broadcast({"type": "sitl_status", "status": "warming_up"})
-        if not await _wait_for_sitl_ready(timeout=90):
-            await manager.broadcast({"type": "sitl_log", "message": "WARNING: EKF warmup timeout, proceeding anyway"})
+        if not await _wait_for_sitl_ready(timeout=30):
+            await manager.broadcast({"type": "sitl_log", "message": "EKF warmup timeout — proceeding"})
 
     await manager.broadcast({"type": "sitl_status", "status": "running"})
-
     out_dir = Path("autopilot_adapter/output")
     connector_path = Path(__file__).parent / "autopilot_adapter" / "mavlink_connector.py"
     mission_json_path = out_dir / "mission.json"
@@ -679,15 +840,101 @@ async def start_mission_endpoint():
     if not connector_path.exists():
         raise HTTPException(status_code=500, detail="mavlink_connector.py not found.")
     if not mission_json_path.exists():
-        raise HTTPException(status_code=500, detail="mission.json not found. Call /api/order first.")
+        raise HTTPException(status_code=500, detail="mission.json not found.")
 
     await manager.run_sitl_mission(connector_path, mission_json_path, connection)
     await manager.broadcast({"type": "mission_started", "source": "ardupilot"})
+    mission = _current_mission["mission"]
+    total = len(mission["approach"]) + len(mission["escort"]) + len(mission["return"])
+    _log_event("mission_start", waypoints=total, mode="ardupilot")
+    return {"status": "started", "source": "ardupilot", "waypoints": total}
+
+
+async def _start_mock_mission():
+    """Run the mock simulator with phase-aware speeds as a background task."""
+    global _mission_in_progress
+    from autopilot_adapter.mock_simulator import simulate_mission
 
     mission = _current_mission["mission"]
     total = len(mission["approach"]) + len(mission["escort"]) + len(mission["return"])
-    _log_event("mission_start", waypoints=total)
-    return {"status": "started", "source": "ardupilot", "waypoints": total}
+
+    async def run_mock():
+        global _mission_in_progress
+        _mission_in_progress = True
+        start_autonomous_agent_loop()
+        try:
+            async def on_event(event):
+                event["source"] = "mock"
+                if event.get("type") == "position":
+                    _latest_telemetry.update(event)
+                elif event.get("type") == "user_position":
+                    _latest_user_position.update({"lat": event["lat"], "lng": event["lng"]})
+                await manager.broadcast(event)
+
+            await simulate_mission(mission, on_event)
+        finally:
+            _mission_in_progress = False
+            stop_autonomous_agent_loop()
+
+    if manager.sim_task and not manager.sim_task.done():
+        manager.sim_task.cancel()
+    manager.sim_task = asyncio.create_task(run_mock())
+    await manager.broadcast({"type": "mission_started", "source": "mock"})
+    _log_event("mission_start", waypoints=total, mode="mock")
+    return {"status": "started", "source": "mock", "waypoints": total}
+
+
+async def _force_cancel_mission():
+    """Forcefully cancel any running mission — kill connector, reset state."""
+    global _mission_in_progress
+    if manager.sim_task and not manager.sim_task.done():
+        manager.sim_task.cancel()
+        try:
+            await manager.sim_task
+        except (asyncio.CancelledError, Exception):
+            pass
+    if hasattr(manager, 'connector_proc') and manager.connector_proc and manager.connector_proc.returncode is None:
+        manager.connector_proc.kill()
+    _mission_in_progress = False
+    stop_autonomous_agent_loop()
+    _log_event("mission_cancelled")
+
+
+@app.post("/api/mission/cancel")
+async def cancel_mission():
+    """Cancel any running mission."""
+    if not _mission_in_progress:
+        return {"status": "no_mission"}
+    async with _mission_lock:
+        await _force_cancel_mission()
+    return {"status": "cancelled"}
+
+
+@app.get("/api/mission/status")
+async def mission_status():
+    """Get current mission state, progress, and phase."""
+    if not _current_mission:
+        return {"status": "idle", "active": False}
+
+    mission = _current_mission.get("mission", {})
+    stats = mission.get("stats", {})
+    total = stats.get("total_waypoints", 0)
+    current_wp = _latest_telemetry.get("waypoint_index", 0) or 0
+    progress = round(current_wp / max(1, total) * 100)
+
+    return {
+        "status": "active" if _mission_in_progress else "planned",
+        "active": _mission_in_progress,
+        "phase": _latest_telemetry.get("phase", "idle"),
+        "progress_pct": progress,
+        "waypoint": current_wp,
+        "total_waypoints": total,
+        "battery_pct": _latest_telemetry.get("battery_pct"),
+        "ground_speed": _latest_telemetry.get("ground_speed"),
+        "altitude": _latest_telemetry.get("alt"),
+        "threat_level": _latest_helpstral.get("threat_level", 1),
+        "threat_status": _latest_helpstral.get("status", "SAFE"),
+    }
 
 
 async def _kill_existing_sitl():

@@ -92,18 +92,28 @@ def connect(connection_string: str) -> mavutil.mavlink_connection:
     return mav
 
 
-def set_wpnav_speed(mav, speed_m_s: float):
-    """Set ArduPilot WPNAV_SPEED in cm/s so the copter flies faster to waypoints."""
-    speed_cms = int(speed_m_s * 100)
+def _set_param(mav, name: str, value: float):
     mav.mav.param_set_send(
         mav.target_system,
         mav.target_component,
-        b"WPNAV_SPEED",
-        float(speed_cms),
+        name.encode().ljust(16, b'\x00')[:16],
+        float(value),
         mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
     )
-    time.sleep(0.5)
-    log(f"WPNAV_SPEED set to {speed_m_s} m/s")
+    time.sleep(0.3)
+
+
+def set_wpnav_speed(mav, speed_m_s: float):
+    """Set ArduPilot speed parameters for GUIDED mode flight."""
+    speed_cms = int(speed_m_s * 100)
+    accel = min(500, max(250, int(speed_m_s * 10)))
+    _set_param(mav, "WPNAV_SPEED", speed_cms)
+    _set_param(mav, "WPNAV_ACCEL", accel)
+    _set_param(mav, "WPNAV_SPEED_UP", min(speed_cms, 500))
+    _set_param(mav, "WPNAV_SPEED_DN", min(speed_cms, 300))
+    _set_param(mav, "PSC_VELXY_MAX", speed_cms)
+    _set_param(mav, "LOIT_SPEED", speed_cms)
+    log(f"WPNAV_SPEED={speed_m_s}m/s PSC_VELXY_MAX={speed_cms}cm/s ACCEL={accel}cm/s²")
 
 
 def set_mode(mav, mode_name: str):
@@ -174,18 +184,19 @@ def get_rich_telemetry(mav) -> dict | None:
     }
 
     # Battery (real or simulated)
-    bat = drain_and_get(mav, "SYS_STATUS")
-    if bat and bat.battery_remaining >= 0:
-        result["battery_pct"] = bat.battery_remaining
-        result["voltage"] = round(bat.voltage_battery / 1000.0, 1)
-    elif SIMULATE_BATTERY and _mission_start_time is not None:
+    if SIMULATE_BATTERY and _mission_start_time is not None:
         elapsed_min = (time.time() - _mission_start_time) / 60.0
-        drain_pct_per_min = 2.5
+        drain_pct_per_min = 1.5  # realistic for a ~25 min max flight
         result["battery_pct"] = max(0, int(SIMULATED_BATTERY_START_PCT - elapsed_min * drain_pct_per_min))
         result["voltage"] = round(11.1 + (result["battery_pct"] / 100.0) * 2.7, 1)
     else:
-        result["battery_pct"] = -1
-        result["voltage"] = 0
+        bat = drain_and_get(mav, "SYS_STATUS")
+        if bat and bat.battery_remaining >= 0:
+            result["battery_pct"] = bat.battery_remaining
+            result["voltage"] = round(bat.voltage_battery / 1000.0, 1)
+        else:
+            result["battery_pct"] = -1
+            result["voltage"] = 0
 
     # Attitude (roll/pitch/yaw)
     att = drain_and_get(mav, "ATTITUDE")
@@ -468,16 +479,38 @@ def fly_mission(mav, waypoints: list[dict]):
     return_wps = [w for w in waypoints if w.get("phase") == "return"]
     total = len(waypoints)
 
-    log(f"Approach: {len(approach)} wp, then live follow, then return: {len(return_wps)} wp")
+    # Thin out approach/return waypoints so the drone can build speed
+    # between them instead of slowing for every closely-spaced point
+    def thin_waypoints(wps, min_spacing_m=50):
+        if len(wps) <= 2:
+            return wps
+        thinned = [wps[0]]
+        for wp in wps[1:-1]:
+            prev = thinned[-1]
+            if haversine(prev["lat"], prev["lng"], wp["lat"], wp["lng"]) >= min_spacing_m:
+                thinned.append(wp)
+        thinned.append(wps[-1])
+        return thinned
 
+    approach_thinned = thin_waypoints(approach, min_spacing_m=80)
+    return_thinned = thin_waypoints(return_wps, min_spacing_m=80)
+
+    log(f"Approach: {len(approach_thinned)} wp (thinned from {len(approach)}), then live follow, then return: {len(return_thinned)} (from {len(return_wps)})")
+
+    # Speed up SITL simulation for approach phase (5x real time)
+    _set_param(mav, "SIM_SPEEDUP", 5.0)
     set_wpnav_speed(mav, APPROACH_RETURN_SPEED)
-    fly_waypoints(mav, approach)
+    fly_waypoints(mav, approach_thinned)
 
+    # Return to real-time for escort (walking speed tracking)
+    _set_param(mav, "SIM_SPEEDUP", 1.0)
     set_wpnav_speed(mav, ESCORT_SPEED)
     live_follow_loop(mav, FOLLOW_DISTANCE_M, TRACK_ALT, total)
 
+    # Speed up again for return phase
+    _set_param(mav, "SIM_SPEEDUP", 5.0)
     set_wpnav_speed(mav, APPROACH_RETURN_SPEED)
-    fly_waypoints(mav, return_wps)
+    fly_waypoints(mav, return_thinned)
 
     log("Return complete — RTL")
     set_mode(mav, "RTL")

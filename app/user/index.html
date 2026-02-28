@@ -157,7 +157,9 @@
       border-radius: 10px; padding: 20px; text-align: center;
     }
     .distress-box p { font-size: 13px; color: #666; margin-bottom: 10px; }
-    .countdown { font-size: 44px; font-weight: 800; color: #dc2626; line-height: 1; }
+    .countdown { font-size: 64px; font-weight: 800; color: #dc2626; line-height: 1; }
+    .btn-danger { font-size: 18px; padding: 16px; letter-spacing: 1px; text-transform: uppercase; animation: pulse-danger 2s ease-in-out infinite; }
+    @keyframes pulse-danger { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.4); } 50% { box-shadow: 0 0 0 8px rgba(220,38,38,0); } }
 
     .locate-btn {
       position: absolute; bottom: 0; right: 16px; z-index: 999;
@@ -199,6 +201,35 @@
     .chat-msg.user { align-self: flex-end; background: #111; color: #fff; border-bottom-right-radius: 4px; }
     .chat-msg.louise { align-self: flex-start; background: #f3f3f3; color: #111; border-bottom-left-radius: 4px; }
     .chat-msg.tools { align-self: flex-start; background: none; color: #999; font-size: 11px; padding: 2px 0; font-style: italic; }
+    .chat-msg.thinking { align-self: flex-start; background: none; color: #999; font-size: 12px; padding: 4px 0; }
+    .chat-msg.thinking::after { content: ''; animation: dots 1.2s steps(4,end) infinite; }
+    @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
+
+    .mission-timeline {
+      display: flex; align-items: center; gap: 0; margin: 12px 0 8px;
+      background: #f5f5f5; border-radius: 8px; padding: 8px 12px;
+    }
+    .tl-phase {
+      flex: 1; text-align: center; position: relative;
+    }
+    .tl-dot {
+      width: 12px; height: 12px; border-radius: 50%; background: #ddd;
+      margin: 0 auto 4px; border: 2px solid #ccc; transition: all 0.3s;
+    }
+    .tl-dot.active { background: #111; border-color: #111; animation: tl-pulse 1.5s infinite; }
+    .tl-dot.done { background: #111; border-color: #111; }
+    .tl-label { font-size: 10px; color: #999; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .tl-label.active { color: #111; }
+    .tl-label.done { color: #111; }
+    .tl-line {
+      width: 100%; height: 2px; background: #ddd; flex: 0 0 auto; min-width: 20px;
+      transition: background 0.3s;
+    }
+    .tl-line.done { background: #111; }
+    @keyframes tl-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(0,0,0,0.3); } 50% { box-shadow: 0 0 0 6px rgba(0,0,0,0); } }
+    .tl-speed { font-size: 10px; color: #666; margin-top: 2px; }
+    .tl-speed.active { color: #111; font-weight: 700; }
+
     .louise-chat-input {
       display: flex; padding: 8px 12px; border-top: 1px solid #eee; gap: 8px;
     }
@@ -302,6 +333,25 @@
           </div>
           <span class="live-badge" id="liveBadge" style="display:none">Live</span>
         </div>
+        <div class="mission-timeline" id="missionTimeline">
+          <div class="tl-phase" id="tlApproach">
+            <div class="tl-dot" id="tlDotApproach"></div>
+            <div class="tl-label" id="tlLabelApproach">Approach</div>
+            <div class="tl-speed" id="tlSpeedApproach">50 m/s</div>
+          </div>
+          <div class="tl-line" id="tlLine1"></div>
+          <div class="tl-phase" id="tlEscort">
+            <div class="tl-dot" id="tlDotEscort"></div>
+            <div class="tl-label" id="tlLabelEscort">Escort</div>
+            <div class="tl-speed" id="tlSpeedEscort">4 m/s</div>
+          </div>
+          <div class="tl-line" id="tlLine2"></div>
+          <div class="tl-phase" id="tlReturn">
+            <div class="tl-dot" id="tlDotReturn"></div>
+            <div class="tl-label" id="tlLabelReturn">Return</div>
+            <div class="tl-speed" id="tlSpeedReturn">instant</div>
+          </div>
+        </div>
         <button class="btn btn-danger" id="btnDistress">I need help</button>
         <button class="btn btn-primary" id="btnArrived">I've arrived — send drone home</button>
         <button class="btn btn-outline" id="btnCancel">I'm safe — cancel</button>
@@ -309,7 +359,7 @@
 
       <div id="stateDistress" style="display:none">
         <div class="distress-box">
-          <p><strong>Alert sent.</strong> Dismiss within 15 seconds or emergency services will be contacted.</p>
+          <p><strong>EMERGENCY ALERT</strong><br>Authorities will be notified in:</p>
           <div class="countdown" id="countdown">15</div>
           <button class="btn" style="background:#111;color:#fff;margin-top:12px" id="btnDismiss">I'm safe — cancel alert</button>
         </div>
@@ -343,9 +393,12 @@
     let droneMarker = null, ws = null;
     let routeCoords = null;
     let missionStats = null;
+    let hubPosition = null;
     let countdownInterval = null;
     let watchId = null;
     let lastPositionSend = 0;
+    let droneRemoveTimer = null;
+    let missionActive = false;
 
     const states = ['stateIdle', 'stateRoute', 'statePlanned', 'stateActive', 'stateDistress'];
     function showState(id) {
@@ -376,14 +429,20 @@
         : 'From: search start address (or tap map)';
     }
 
+    const _geocodeCache = new Map();
+
     async function reverseGeocode(lat, lng) {
+      const cacheKey = `${lat.toFixed(5)},${lng.toFixed(5)}`;
+      if (_geocodeCache.has(cacheKey)) return _geocodeCache.get(cacheKey);
       try {
         const resp = await fetch(`https://nominatim.openstreetmap.org/reverse?lat=${lat}&lon=${lng}&format=json&zoom=18`, {
           headers: { 'User-Agent': 'LouiseWalkHome/1.0' }
         });
         const data = await resp.json();
         const parts = (data.display_name || '').split(',');
-        return parts.slice(0, 3).join(',').trim() || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        const name = parts.slice(0, 3).join(',').trim() || `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
+        _geocodeCache.set(cacheKey, name);
+        return name;
       } catch { return `${lat.toFixed(5)}, ${lng.toFixed(5)}`; }
     }
 
@@ -480,7 +539,7 @@
       searchResults.innerHTML = '<div class="search-status">Searching...</div>';
       searchResults.style.display = 'block';
       try {
-        const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&addressdetails=1`, {
+        const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&addressdetails=1&countrycodes=fr&viewbox=2.2,48.9,2.5,48.8&bounded=0`, {
           headers: { 'Accept': 'application/json', 'User-Agent': 'LouiseWalkHome/1.0' }
         });
         const results = await resp.json();
@@ -508,7 +567,7 @@
       searchResults.style.display = 'block';
       searchTimeout = setTimeout(async () => {
         try {
-          const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=6&addressdetails=1`, {
+          const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=6&addressdetails=1&countrycodes=fr&viewbox=2.2,48.9,2.5,48.8&bounded=0`, {
             headers: { 'Accept': 'application/json', 'User-Agent': 'LouiseWalkHome/1.0' }
           });
           const results = await resp.json();
@@ -529,7 +588,7 @@
         } catch (err) {
           searchResults.innerHTML = '<div class="search-status">Search failed.</div>';
         }
-      }, 400);
+      }, 200);
     });
 
     searchResults.addEventListener('click', (e) => {
@@ -549,30 +608,33 @@
       searchInput.focus();
     };
 
-    map.on('click', async (e) => {
+    map.on('click', (e) => {
       if (document.getElementById('stateActive').style.display !== 'none') return;
       if (document.getElementById('statePlanned').style.display !== 'none') return;
       if (!origin) {
         origin = [e.latlng.lat, e.latlng.lng];
         placeOrigin(origin);
-        document.getElementById('originLabel').textContent = 'Getting address...';
-        const name = await reverseGeocode(origin[0], origin[1]);
-        document.getElementById('originLabel').textContent = name;
-        document.getElementById('originLabel').classList.remove('placeholder');
+        const lbl = document.getElementById('originLabel');
+        lbl.textContent = `${origin[0].toFixed(4)}, ${origin[1].toFixed(4)}`;
+        lbl.classList.remove('placeholder');
         updateIdleHint();
         updateSearchPlaceholder();
+        reverseGeocode(origin[0], origin[1]).then(name => { lbl.textContent = name; });
         return;
       }
       placeDest([e.latlng.lat, e.latlng.lng]);
-      document.getElementById('destLabelIdle').textContent = 'Getting address...';
-      const name = await reverseGeocode(e.latlng.lat, e.latlng.lng);
-      destDisplayName = name;
-      document.getElementById('destLabelIdle').textContent = name;
-      document.getElementById('destLabelIdle').classList.remove('placeholder');
+      const dlbl = document.getElementById('destLabelIdle');
+      destDisplayName = `${e.latlng.lat.toFixed(4)}, ${e.latlng.lng.toFixed(4)}`;
+      dlbl.textContent = destDisplayName;
+      dlbl.classList.remove('placeholder');
       searchInput.value = '';
       searchClear.style.display = 'none';
       updateIdleHint();
       fetchRoute();
+      reverseGeocode(e.latlng.lat, e.latlng.lng).then(name => {
+        destDisplayName = name;
+        dlbl.textContent = name;
+      });
     });
 
     async function fetchRoute() {
@@ -607,17 +669,15 @@
         document.getElementById('routeDestLabel').textContent = destDisplayName || `${dest[0].toFixed(4)}, ${dest[1].toFixed(4)}`;
 
         let priceHtml = '';
-        try {
-          const estResp = await fetch('/api/estimate', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ origin, destination: dest }),
-          });
-          if (estResp.ok) {
-            const est = await estResp.json();
-            priceHtml = '<br><span style="font-size:12px;font-weight:600;color:#111">Est. ' + (est.currency || 'EUR') + ' ' + (est.estimate_eur != null ? est.estimate_eur.toFixed(2) : '—') + '</span> (distance ' + (est.distance_km != null ? est.distance_km + ' km' : '') + ')';
-          }
-        } catch (_) {}
+        if (data.price) {
+          const p = data.price;
+          const sym = p.currency === 'EUR' ? '\u20AC' : p.currency || 'EUR';
+          const total = p.estimate_eur != null ? p.estimate_eur.toFixed(2) : '--';
+          const distKm = p.distance_km != null ? p.distance_km + ' km' : '';
+          const breakdown = p.pricing_note || '';
+          priceHtml = `<br><strong style="font-size:15px;color:#111">Est. ${sym}${total}</strong> <span style="font-size:11px;color:#666">(${distKm})</span>`;
+          if (breakdown) priceHtml += `<br><span style="font-size:10px;color:#999">${breakdown}</span>`;
+        }
         const note = data.source === 'fallback' && data.detail
           ? '<br><span style="font-size:11px;color:#b45309">' + data.detail + '</span>'
           : '<br><span style="font-size:11px;color:#999">A drone will watch over you the entire way</span>';
@@ -648,13 +708,21 @@
           body: JSON.stringify({ origin, destination: dest, route: routeCoords || null }),
         });
         const data = await resp.json();
-        if (resp.status === 409) {
-          alert('A mission is already in progress. Wait for it to finish, or ask Mission Control to end it.');
-          return;
-        }
         if (data.detail || data.error) throw new Error(data.detail || data.error);
 
         missionStats = data.stats;
+        if (data.hub) hubPosition = data.hub;
+
+        // Kill any stale timers and markers from previous missions
+        if (droneRemoveTimer) { clearTimeout(droneRemoveTimer); droneRemoveTimer = null; }
+        if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; }
+        removeDemoUser();
+        missionActive = false;
+
+        // Force drone marker at hub — this is the ONLY source of truth for starting position
+        if (hubPosition) {
+          droneMarker = L.marker([hubPosition.lat, hubPosition.lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
+        }
 
         if (data.routes) {
           [approachLayer, escortLayer, returnLayer].forEach(l => { if (l) map.removeLayer(l); });
@@ -668,10 +736,15 @@
         document.getElementById('etaLabel').textContent = 'Drone arrives in';
 
         const s = data.stats || {};
+        const pr = data.price || {};
+        const sym = pr.currency === 'EUR' ? '\u20AC' : pr.currency || '';
+        const priceStr = pr.total_eur != null ? `<strong style="font-size:16px">${sym}${pr.total_eur.toFixed(2)}</strong>` : '';
+        const priceBreakdown = pr.base_eur != null ? `<span style="font-size:10px;color:#888">${sym}${pr.base_eur.toFixed(2)} base + ${sym}${pr.distance_eur.toFixed(2)} (${pr.escort_distance_km} km)</span>` : '';
         document.getElementById('plannedInfo').innerHTML = `
           <strong>${s.total_waypoints} waypoints</strong> generated<br>
           Approach (${s.approach_wp} wp) &rarr; Escort (${s.escort_wp} wp) &rarr; Return (${s.return_wp} wp)<br>
-          Total flight: ~${Math.round((s.estimated_flight_time_s||0)/60)} min &middot; ${s.total_distance_m}m
+          Total flight: ~${Math.round((s.estimated_flight_time_s||0)/60)} min &middot; ${s.total_distance_m}m<br>
+          ${priceStr} ${priceBreakdown}
         `;
 
         showState('statePlanned');
@@ -685,13 +758,16 @@
     document.getElementById('btnGo').onclick = async () => {
       const btn = document.getElementById('btnGo');
       btn.disabled = true;
-      btn.textContent = 'Starting ArduPilot...';
+      btn.textContent = 'Launching drone...';
       try {
+        if (droneRemoveTimer) { clearTimeout(droneRemoveTimer); droneRemoveTimer = null; }
         const resp = await fetch('/api/mission/start', { method: 'POST' });
         const data = await resp.json();
         if (data.detail) throw new Error(data.detail);
+        missionActive = true;
         showState('stateActive');
-        document.getElementById('droneText').textContent = 'Arming...';
+        resetTimeline();
+        document.getElementById('droneText').textContent = data.source === 'mock' ? 'Drone launched (sim)' : 'ArduPilot armed — drone launching';
         document.getElementById('droneSub').textContent = '';
         document.getElementById('liveBadge').style.display = 'none';
         startLiveTracking();
@@ -739,17 +815,22 @@
       ws = new WebSocket(`${proto}://${location.host}/ws`);
 
       ws.onopen = () => {
-        setInterval(() => { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' })); }, 20000);
+        if (window._wsPingInterval) clearInterval(window._wsPingInterval);
+        window._wsPingInterval = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
+        }, 20000);
       };
 
       ws.onmessage = (e) => {
         const msg = JSON.parse(e.data);
         if (msg.type === 'position') {
           updateDrone(msg);
-          if (document.getElementById('stateActive').style.display !== 'none' && msg.source === 'ardupilot') {
+          if (document.getElementById('stateActive').style.display !== 'none') {
             document.getElementById('liveBadge').style.display = 'inline-block';
-            document.getElementById('liveBadge').textContent = 'Live';
+            document.getElementById('liveBadge').textContent = msg.source === 'mock' ? 'Sim' : 'Live';
           }
+        } else if (msg.type === 'user_position' && msg.source === 'demo') {
+          updateDemoUser(msg);
         } else if (msg.type === 'agent_update') {
           const hs = msg.helpstral || {};
           const tl = hs.threat_level || 1;
@@ -768,6 +849,7 @@
         } else if (msg.type === 'phase') {
           if (document.getElementById('stateActive').style.display !== 'none') {
             document.getElementById('droneText').textContent = phaseLabel(msg.phase);
+            updateTimeline(msg.phase, null);
           }
         } else if (msg.type === 'mission_started') {
           if (document.getElementById('stateActive').style.display !== 'none' ||
@@ -781,25 +863,38 @@
           if (document.getElementById('statePlanned').style.display !== 'none' ||
               document.getElementById('stateActive').style.display !== 'none') {
             const btn = document.getElementById('btnGo');
-            if (msg.status === 'starting') btn.textContent = 'Starting SITL...';
-            else if (msg.status === 'running') btn.textContent = 'SITL ready — launching...';
+            if (msg.status === 'starting') { btn.textContent = 'Starting ArduPilot...'; btn.disabled = true; }
+            else if (msg.status === 'warming_up') { btn.textContent = 'Warming up autopilot...'; btn.disabled = true; }
+            else if (msg.status === 'running') { btn.textContent = 'ArduPilot ready — arming...'; }
           }
         } else if (msg.type === 'connector_died') {
           document.getElementById('droneText').textContent = 'Connection lost';
           document.getElementById('droneSub').textContent = 'Drone returning to hub — Mission Control will reconnect.';
           document.getElementById('liveBadge').style.display = 'none';
         } else if (msg.type === 'complete') {
+          if (!missionActive) return; // Ignore stale complete from cancelled missions
+          missionActive = false;
           stopLiveTracking();
+          updateTimeline('return', null);
+          removeDemoUser();
           document.getElementById('droneText').textContent = 'Mission complete';
-          document.getElementById('droneSub').textContent = 'Drone returned to hub';
+          document.getElementById('droneSub').textContent = 'Drone at hub — ready for next mission';
           document.getElementById('liveBadge').style.display = 'none';
-          if (droneMarker) setTimeout(() => { if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; } }, 5000);
+          if (hubPosition && droneMarker) {
+            droneMarker.setLatLng([hubPosition.lat, hubPosition.lng]);
+          }
+          if (droneRemoveTimer) clearTimeout(droneRemoveTimer);
+          droneRemoveTimer = setTimeout(() => { if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; } droneRemoveTimer = null; }, 4000);
         }
       };
 
       ws.onclose = () => {
         document.getElementById('liveBadge').style.display = 'none';
-        setTimeout(connectWebSocket, 3000);
+        if (window._wsPingInterval) { clearInterval(window._wsPingInterval); window._wsPingInterval = null; }
+        if (!window._wsReconnecting) {
+          window._wsReconnecting = true;
+          setTimeout(() => { window._wsReconnecting = false; connectWebSocket(); }, 3000);
+        }
       };
     }
     connectWebSocket();
@@ -812,24 +907,115 @@
 
     function updateDrone(msg) {
       if (msg.lat == null || msg.lng == null) return;
+      if (msg.source === 'hub_reset') return; // Order handler already placed marker at hub
       if (!droneMarker) {
         droneMarker = L.marker([msg.lat, msg.lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
       } else {
         droneMarker.setLatLng([msg.lat, msg.lng]);
       }
+      if (document.getElementById('stateActive').style.display === 'none') return;
       document.getElementById('droneText').textContent = phaseLabel(msg.phase) || '—';
       const tw = msg.total_waypoints; const wi = msg.waypoint_index;
       const pct = (typeof tw === 'number' && typeof wi === 'number' && tw > 0) ? Math.round((wi / tw) * 100) : null;
       const altText = (msg.alt != null && !isNaN(msg.alt)) ? ' · ' + Math.round(msg.alt) + 'm' : '';
-      document.getElementById('droneSub').textContent = (pct != null ? pct + '% complete' : '—') + altText;
-      if (document.getElementById('stateActive').style.display !== 'none' && map.getZoom() >= 14) {
+      const speedText = (msg.ground_speed != null) ? ' · ' + Math.round(msg.ground_speed) + ' m/s' : '';
+      document.getElementById('droneSub').textContent = (pct != null ? pct + '% complete' : '—') + altText + speedText;
+      if (msg.phase) updateTimeline(msg.phase, msg.ground_speed);
+      if (map.getZoom() >= 14) {
         const dronePos = L.latLng(msg.lat, msg.lng);
         if (!map.getBounds().contains(dronePos)) map.panTo(dronePos, { animate: true, duration: 0.5 });
       }
     }
 
     function phaseLabel(p) {
-      return { approach: 'Drone approaching', escort: 'Drone escorting you', 'return': 'Drone returning to hub' }[p] || (p ? String(p).replace(/_/g, ' ') : '');
+      return {
+        approach: 'Drone approaching at 50 m/s',
+        hub_to_user: 'Drone approaching at 50 m/s',
+        escort: 'Drone escorting you',
+        track: 'Drone escorting you',
+        'return': 'Drone returned to hub',
+      }[p] || (p ? String(p).replace(/_/g, ' ') : '');
+    }
+
+    let demoUserMarker = null;
+    const demoUserIcon = L.divIcon({
+      className: '',
+      html: '<div style="width:12px;height:12px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3)"></div>',
+      iconSize: [12, 12], iconAnchor: [6, 6],
+    });
+
+    function updateDemoUser(msg) {
+      if (msg.lat == null || msg.lng == null) return;
+      if (!demoUserMarker) {
+        demoUserMarker = L.marker([msg.lat, msg.lng], { icon: demoUserIcon, zIndexOffset: 900 }).addTo(map);
+      } else {
+        demoUserMarker.setLatLng([msg.lat, msg.lng]);
+      }
+    }
+
+    function removeDemoUser() {
+      if (demoUserMarker) { map.removeLayer(demoUserMarker); demoUserMarker = null; }
+    }
+
+    let activePhase = null;
+    const phaseToTimeline = { approach: 'Approach', hub_to_user: 'Approach', escort: 'Escort', track: 'Escort', 'return': 'Return' };
+
+    function updateTimeline(phase, speed) {
+      if (!phase) return;
+      const norm = phaseToTimeline[phase] || phase;
+      activePhase = norm;
+
+      const phases = ['Approach', 'Escort', 'Return'];
+      const dotIds = { Approach: 'tlDotApproach', Escort: 'tlDotEscort', Return: 'tlDotReturn' };
+      const labelIds = { Approach: 'tlLabelApproach', Escort: 'tlLabelEscort', Return: 'tlLabelReturn' };
+      const speedIds = { Approach: 'tlSpeedApproach', Escort: 'tlSpeedEscort', Return: 'tlSpeedReturn' };
+      const lineIds = ['tlLine1', 'tlLine2'];
+
+      let reached = false;
+      phases.forEach(function(p, idx) {
+        const dot = document.getElementById(dotIds[p]);
+        const label = document.getElementById(labelIds[p]);
+        const spd = document.getElementById(speedIds[p]);
+        if (!dot) return;
+
+        dot.className = 'tl-dot';
+        label.className = 'tl-label';
+        if (spd) spd.className = 'tl-speed';
+
+        if (p === norm) {
+          dot.classList.add('active');
+          label.classList.add('active');
+          if (spd) {
+            spd.classList.add('active');
+            if (speed != null) spd.textContent = Math.round(speed) + ' m/s';
+          }
+          reached = true;
+        } else if (!reached) {
+          dot.classList.add('done');
+          label.classList.add('done');
+        }
+
+        if (idx < lineIds.length) {
+          const line = document.getElementById(lineIds[idx]);
+          if (line) line.className = 'tl-line' + (!reached ? ' done' : '');
+        }
+      });
+    }
+
+    function resetTimeline() {
+      activePhase = null;
+      ['tlDotApproach','tlDotEscort','tlDotReturn'].forEach(function(id) {
+        var el = document.getElementById(id); if (el) el.className = 'tl-dot';
+      });
+      ['tlLabelApproach','tlLabelEscort','tlLabelReturn'].forEach(function(id) {
+        var el = document.getElementById(id); if (el) el.className = 'tl-label';
+      });
+      ['tlSpeedApproach','tlSpeedEscort','tlSpeedReturn'].forEach(function(id) {
+        var el = document.getElementById(id); if (el) el.className = 'tl-speed';
+      });
+      ['tlLine1','tlLine2'].forEach(function(id) {
+        var el = document.getElementById(id); if (el) el.className = 'tl-line';
+      });
     }
 
     function startLiveTracking() {
@@ -907,10 +1093,33 @@
       countdownInterval = setInterval(() => {
         countdownLeft--;
         document.getElementById('countdown').textContent = countdownLeft;
+        // Audio tick for urgency
+        try { const ctx = new (window.AudioContext || window.webkitAudioContext)();
+          const o = ctx.createOscillator(); o.frequency.value = countdownLeft <= 5 ? 880 : 440;
+          o.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.1);
+        } catch(_){}
         if (countdownLeft <= 0) {
           clearInterval(countdownInterval);
           document.getElementById('countdown').textContent = 'SENT';
-          if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'emergency', origin }));
+          // Use CURRENT GPS position, not stale origin
+          const emergencyPayload = { type: 'emergency' };
+          if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              p => { emergencyPayload.lat = p.coords.latitude; emergencyPayload.lng = p.coords.longitude;
+                if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(emergencyPayload)); },
+              () => { emergencyPayload.origin = origin;
+                if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(emergencyPayload)); },
+              { enableHighAccuracy: true, timeout: 3000 }
+            );
+          } else {
+            emergencyPayload.origin = origin;
+            if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(emergencyPayload));
+          }
+          // Also try HTTP fallback in case WS is down
+          fetch('/api/emergency', { method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(emergencyPayload)
+          }).catch(() => {});
           setTimeout(() => {
             showState('stateActive');
             document.getElementById('droneCard').style.background = '#fff';
@@ -970,21 +1179,29 @@
         conversationHistory.push({ role: 'user', content: msg });
         waiting = true;
 
+        const thinkingEl = document.createElement('div');
+        thinkingEl.className = 'chat-msg thinking';
+        thinkingEl.textContent = 'Louise is thinking';
+        body.appendChild(thinkingEl);
+        body.scrollTop = body.scrollHeight;
+
         try {
           const resp = await fetch('/api/louise', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ message: msg, conversation: conversationHistory }),
           });
+          thinkingEl.remove();
           const data = await resp.json();
           const tools = data.tool_calls_made || [];
           if (tools.length > 0) {
-            addMsg('Used: ' + tools.map(function(t) { return t.tool; }).join(', '), 'tools');
+            addMsg('Checked: ' + tools.map(function(t) { return t.tool.replace(/_/g,' '); }).join(', '), 'tools');
           }
           const reply = data.response || 'I couldn\'t process that. Try again?';
           addMsg(reply, 'louise');
           conversationHistory.push({ role: 'assistant', content: reply });
         } catch (e) {
+          thinkingEl.remove();
           addMsg('Connection error. Try again.', 'louise');
         }
         waiting = false;

@@ -9,6 +9,7 @@ load_dotenv()
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
 MISTRAL_VISION_MODEL = os.getenv("MISTRAL_VISION_MODEL", "pixtral-12b-2409")  # vision for Helpstral/Flystral
 MISTRAL_GENERAL_MODEL = os.getenv("MISTRAL_GENERAL_MODEL", "mistral-large-latest")  # text/path decisions
+MISTRAL_FAST_MODEL = os.getenv("MISTRAL_FAST_MODEL", "mistral-small-latest")       # fast conversational (Louise)
 HELPSTRAL_MODEL_ID = os.getenv("HELPSTRAL_MODEL_ID", MISTRAL_VISION_MODEL)
 FLYSTRAL_MODEL_ID = os.getenv("FLYSTRAL_MODEL_ID", MISTRAL_VISION_MODEL)
 
@@ -31,8 +32,8 @@ GEOFENCE_BOUNDS = {
 }
 
 # Pricing — distance-based (e.g. €3 base + per km)
-BASE_PRICE_EUR = float(os.getenv("BASE_PRICE_EUR", "3.0"))
-PRICE_PER_KM_EUR = float(os.getenv("PRICE_PER_KM_EUR", "0.50"))
+BASE_PRICE_EUR = float(os.getenv("BASE_PRICE_EUR", "1.50"))
+PRICE_PER_KM_EUR = float(os.getenv("PRICE_PER_KM_EUR", "0.25"))
 CURRENCY = os.getenv("PRICE_CURRENCY", "EUR")
 
 # Simulated battery when real telemetry has no battery (SITL often reports -1)

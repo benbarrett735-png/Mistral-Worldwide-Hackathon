@@ -348,6 +348,7 @@
   L.circle(HUB, { radius: 3000, color: '#111', fillColor: '#111', fillOpacity: 0.02, weight: 1, dashArray: '6,4' }).addTo(map);
 
   let droneMarker = null, routeLayers = {}, userMarker = null, destMarker = null;
+  let hubPosition = null;
   let currentPhase = null;
   const phaseDone = new Set();
   let hasMission = false;
@@ -495,13 +496,18 @@
     ws.onopen = () => {
       dot.classList.add('connected'); dot.title = 'Connected';
       addLog('Connected to server');
-      setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({type:'ping'})); }, 20000);
+      if (window._wsPingInterval) clearInterval(window._wsPingInterval);
+      window._wsPingInterval = setInterval(() => { if (ws.readyState === 1) ws.send(JSON.stringify({type:'ping'})); }, 20000);
     };
     ws.onmessage = (e) => handleEvent(JSON.parse(e.data));
     ws.onclose = () => {
       dot.classList.remove('connected'); dot.title = 'Reconnecting...';
+      if (window._wsPingInterval) { clearInterval(window._wsPingInterval); window._wsPingInterval = null; }
       addLog('Disconnected — retrying', 'warn');
-      setTimeout(connect, 3000);
+      if (!window._wsReconnecting) {
+        window._wsReconnecting = true;
+        setTimeout(() => { window._wsReconnecting = false; connect(); }, 3000);
+      }
     };
   }
   connect();
@@ -511,10 +517,9 @@
       case 'mission_update':  handleMissionUpdate(msg); break;
       case 'mission_started': handleMissionStarted(msg); break;
       case 'sitl_status':     handleSitlStatus(msg); break;
-      case 'position':        if (msg.source === 'ardupilot') {
-                                updateDrone(msg); updateTelemetry(msg);
-                                if (msg.phase && msg.phase !== currentPhase) handlePhaseChange(msg.phase);
-                              } else { updateDrone(msg); }
+      case 'position':        if (msg.source === 'hub_reset') break;
+                              updateDrone(msg); updateTelemetry(msg);
+                              if (msg.phase && msg.phase !== currentPhase) handlePhaseChange(msg.phase);
                               break;
       case 'phase':           handlePhaseChange(msg.phase); break;
       case 'connector_died':  handleConnectorDied(); break;
@@ -523,6 +528,7 @@
       case 'sitl_log':        addLog(msg.message); appendArduPilotConsole(msg.message); break;
       case 'flystral':        handleFlystral(msg); break;
       case 'agent_update':    handleAgentUpdate(msg); break;
+      case 'user_position':   if (msg.source === 'demo') updateDemoUser(msg); break;
       case 'pong':            break;
     }
   }
@@ -546,6 +552,12 @@
     showWaypointFiles(s);
     if (msg.user) placeMarker('user', [msg.user.lat, msg.user.lng], '#111', 'User');
     if (msg.destination) placeMarker('dest', [msg.destination.lat, msg.destination.lng], '#555', 'Destination');
+    if (msg.hub) {
+      hubPosition = msg.hub;
+      if (droneMarker) map.removeLayer(droneMarker);
+      if (demoUserMarker) { map.removeLayer(demoUserMarker); demoUserMarker = null; }
+      droneMarker = L.marker([msg.hub.lat, msg.hub.lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
+    }
     const all = [...(msg.routes.approach||[]),...(msg.routes.escort||[]),...(msg.routes['return']||[])];
     if (all.length) map.fitBounds(all, { padding: [60, 60] });
   }
@@ -589,8 +601,21 @@
     else droneMarker.setLatLng([msg.lat, msg.lng]);
   }
 
+  let demoUserMarker = null;
+  const demoUserIcon = L.divIcon({
+    className: '',
+    html: '<div style="width:10px;height:10px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3)"></div>',
+    iconSize: [10, 10], iconAnchor: [5, 5],
+  });
+
+  function updateDemoUser(msg) {
+    if (msg.lat == null || msg.lng == null) return;
+    if (!demoUserMarker) demoUserMarker = L.marker([msg.lat, msg.lng], { icon: demoUserIcon, zIndexOffset: 900 }).addTo(map);
+    else demoUserMarker.setLatLng([msg.lat, msg.lng]);
+  }
+
   function appendFlightLog(msg) {
-    if (msg.source !== 'ardupilot' || msg.lat == null || msg.lng == null) return;
+    if (msg.lat == null || msg.lng == null) return;
     flightLog.push({
       ts: new Date().toLocaleTimeString('en-GB', { hour12: false }),
       lat: msg.lat, lng: msg.lng, alt: msg.alt, speed: msg.ground_speed, heading: msg.heading, phase: msg.phase || '—'
@@ -605,27 +630,27 @@
   }
 
   function updateTelemetry(msg) {
-    if (msg.source !== 'ardupilot') return;
+    if (msg.lat == null || msg.lng == null) return;
     document.getElementById('telemetrySection').style.display = '';
     document.getElementById('flightLogSection').style.display = '';
-    document.getElementById('telSource').textContent = 'LIVE';
+    document.getElementById('telSource').textContent = msg.source === 'mock' ? 'SIM' : 'LIVE';
     appendFlightLog(msg);
     const set = (id, v) => { const e = document.getElementById(id); if (e) e.textContent = v ?? '—'; };
     set('telAlt', (msg.alt != null && !isNaN(msg.alt)) ? Math.round(msg.alt) : '—');
     set('telSpeed', msg.ground_speed != null ? msg.ground_speed.toFixed(1) : '—');
     set('telHeading', msg.heading != null ? Math.round(msg.heading) : '—');
-    const pct = (msg.battery_pct != null && msg.battery_pct >= 0) ? msg.battery_pct : null;
-    set('telBattery', pct != null ? pct : '—');
+    const batPct = (msg.battery_pct != null && msg.battery_pct >= 0) ? msg.battery_pct : null;
+    set('telBattery', batPct != null ? Math.round(batPct) : '—');
     const batEl = document.getElementById('telBattery');
-    if (batEl) batEl.style.color = (pct != null && pct <= 15) ? '#dc2626' : '';
+    if (batEl) batEl.style.color = (batPct != null && batPct <= 15) ? '#dc2626' : '';
     set('telClimb', msg.climb_rate != null ? msg.climb_rate.toFixed(1) : '—');
     set('telDistWp', msg.dist_to_wp != null ? Math.round(msg.dist_to_wp) : '—');
     set('telRoll', msg.roll != null ? msg.roll.toFixed(1) : '—');
     set('telPitch', msg.pitch != null ? msg.pitch.toFixed(1) : '—');
     set('telSats', msg.satellites != null ? msg.satellites : '—');
     const tw = msg.total_waypoints, wi = msg.waypoint_index;
-    const pct = (typeof tw === 'number' && typeof wi === 'number' && tw > 0) ? Math.round((wi/tw)*100) : null;
-    set('telPct', pct != null ? pct : '—');
+    const progressPct = (typeof tw === 'number' && typeof wi === 'number' && tw > 0) ? Math.round((wi/tw)*100) : null;
+    set('telPct', progressPct != null ? progressPct : '—');
     set('telPhase', (msg.phase && msg.phase !== 'unknown') ? String(msg.phase).replace(/_/g,' ') : '—');
     set('telWp', (typeof tw === 'number' && typeof wi === 'number') ? (wi+1)+'/'+tw : '—');
     updateArduPilotPanel(msg);
@@ -679,17 +704,20 @@
     if (tbody) tbody.innerHTML = '';
   }
 
-  const phaseIds = { approach:'ph1', escort:'ph2', 'return':'ph3' };
-  const phaseLabels = { approach:'Approach', escort:'Escort', 'return':'Return' };
+  const phaseIds = { approach:'ph1', hub_to_user:'ph1', escort:'ph2', track:'ph2', 'return':'ph3' };
+  const phaseLabels = { approach:'Approach', hub_to_user:'Approach (50 m/s)', escort:'Escort', track:'Escort', 'return':'Return' };
+
+  function normalizePhase(p) { return { hub_to_user:'approach', track:'escort' }[p] || p; }
 
   function resetPhases() { phaseDone.clear(); currentPhase = null; ['approach','escort','return'].forEach(p => setBadge(p,'pending')); }
 
   function handlePhaseChange(phase) {
+    const norm = normalizePhase(phase);
     addLog(`Phase: ${phaseLabels[phase]||phase}`);
-    if (currentPhase && currentPhase !== phase) { phaseDone.add(currentPhase); setBadge(currentPhase,'done'); }
-    currentPhase = phase;
-    setBadge(phase, 'active');
-    if (phase === 'escort') startCamera();
+    if (currentPhase && currentPhase !== norm) { phaseDone.add(currentPhase); setBadge(currentPhase,'done'); }
+    currentPhase = norm;
+    setBadge(norm, 'active');
+    if (norm === 'escort') startCamera();
   }
 
   function handleConnectorDied() {
@@ -701,9 +729,13 @@
 
   function handleComplete() {
     if (currentPhase) { phaseDone.add(currentPhase); setBadge(currentPhase,'done'); }
-    addLog('Mission complete');
+    addLog('Mission complete — drone at hub');
     stopCamera(); resetTelemetryAndVision();
-    if (droneMarker) setTimeout(() => { map.removeLayer(droneMarker); droneMarker = null; }, 2000);
+    if (hubPosition && droneMarker) {
+      droneMarker.setLatLng([hubPosition.lat, hubPosition.lng]);
+    }
+    if (demoUserMarker) { map.removeLayer(demoUserMarker); demoUserMarker = null; }
+    setTimeout(() => { if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; } }, 4000);
   }
 
   function setBadge(phase, state) {
@@ -822,11 +854,22 @@
     }
   }
 
-  function handleEmergency() {
-    document.getElementById('emergencyBanner').style.display = 'block';
+  function handleEmergency(msg) {
+    const banner = document.getElementById('emergencyBanner');
+    banner.style.display = 'block';
+    const locText = (msg.lat && msg.lng) ? ` at ${msg.lat.toFixed(5)}, ${msg.lng.toFixed(5)}` : '';
+    banner.innerHTML = `<strong>EMERGENCY ALERT</strong>${locText}<br>
+      <span style="font-size:12px">Source: ${msg.source || 'user'} | ${new Date().toLocaleTimeString()}</span>
+      <button onclick="this.parentElement.style.display='none'" style="float:right;background:#fff;color:#dc2626;border:1px solid #dc2626;padding:4px 12px;border-radius:4px;cursor:pointer;font-weight:600">Acknowledge</button>`;
     setVisionAI('hs', 'distress', 'EMERGENCY');
-    addLog('EMERGENCY — user distress signal', 'danger');
-    setTimeout(() => { document.getElementById('emergencyBanner').style.display = 'none'; }, 30000);
+    addLog(`EMERGENCY — user distress signal${locText}`, 'danger');
+    // Play audio alert
+    try { const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      for (let i = 0; i < 3; i++) {
+        const o = ctx.createOscillator(); o.frequency.value = 880;
+        o.connect(ctx.destination); o.start(ctx.currentTime + i * 0.3); o.stop(ctx.currentTime + i * 0.3 + 0.15);
+      }
+    } catch(_){}
   }
 
   function drawRoutes(routes) {

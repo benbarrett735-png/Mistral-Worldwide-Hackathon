@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import MISTRAL_API_KEY, MISTRAL_GENERAL_MODEL, DRONE_HUB
+from config import MISTRAL_API_KEY, MISTRAL_FAST_MODEL, DRONE_HUB
 
 SYSTEM_PROMPT = (
     "You are Louise, a personal safety AI assistant built into a drone escort app. "
@@ -81,6 +81,21 @@ TOOLS = [
                     "context": {"type": "string", "description": "Brief context like 'walking home late at night' or 'crossing park'"},
                 },
                 "required": ["context"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "escalate_emergency",
+            "description": "Trigger an emergency alert if the user is in immediate danger or asks for urgent help. This notifies mission control and can dispatch assistance.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "reasoning": {"type": "string", "description": "Brief description of why the emergency is being escalated"},
+                    "severity": {"type": "string", "enum": ["low", "medium", "high", "critical"], "description": "How urgent the situation is"},
+                },
+                "required": ["reasoning", "severity"],
             },
         },
     },
@@ -166,17 +181,40 @@ def tool_get_safety_tips(context: str) -> str:
     return json.dumps({"tips": tips[:5], "time_of_day": "night" if is_night else "day"})
 
 
+def tool_escalate_emergency(reasoning: str, severity: str = "high") -> str:
+    import logging
+    entry = {
+        "source": "louise",
+        "reasoning": reasoning,
+        "severity": severity,
+        "timestamp": time.time(),
+        "user_position": _user_position,
+    }
+    logging.warning(f"LOUISE EMERGENCY ESCALATION: {entry}")
+    # Server will pick this up via the shared state
+    _escalation_log.append(entry)
+    return json.dumps({
+        "status": "escalated",
+        "message": f"Emergency alert sent to mission control ({severity} severity). Help is on the way.",
+        "alert_id": len(_escalation_log),
+    })
+
+
+_escalation_log: list[dict] = []
+
+
 TOOL_DISPATCH = {
     "get_route_safety": lambda args: tool_get_route_safety(**args),
     "get_escort_status": lambda args: tool_get_escort_status(),
     "get_area_info": lambda args: tool_get_area_info(args.get("lat", 0), args.get("lng", 0)),
     "get_safety_tips": lambda args: tool_get_safety_tips(args.get("context", "")),
+    "escalate_emergency": lambda args: tool_escalate_emergency(args.get("reasoning", ""), args.get("severity", "high")),
 }
 
 
 # ── Agent execution ──────────────────────────────────────────────────────────
 
-MAX_TOOL_ROUNDS = 3
+MAX_TOOL_ROUNDS = 2
 
 
 def run_louise_agent(
@@ -208,7 +246,7 @@ def run_louise_agent(
 
         for _round in range(MAX_TOOL_ROUNDS + 1):
             response = client.chat.complete(
-                model=MISTRAL_GENERAL_MODEL,
+                model=MISTRAL_FAST_MODEL,
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
