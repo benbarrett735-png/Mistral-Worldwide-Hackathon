@@ -14,3 +14,5 @@ build/
 *.tlog
 *.tlog.raw
 helpstral/dataset/helpstral_dataset.jsonl
+helpstral/dataset/*.jsonl
+flystral/dataset/*.jsonl
