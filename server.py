@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -43,7 +44,11 @@ from config import (
     _env_warnings,
 )
 from autopilot_adapter.waypoint_generator import generate_from_osrm, generate_all, save_mission, haversine as wp_haversine
-from flystral.command_parser import VALID_COMMANDS as FLYSTRAL_VALID_COMMANDS, parse_to_waypoint_update
+from flystral.command_parser import (
+    VALID_COMMANDS as FLYSTRAL_VALID_COMMANDS,
+    parse_to_waypoint_update,
+    parse_velocity_output,
+)
 from helpstral.agent import (
     run_helpstral_agent, get_location_context, DEFAULT_ASSESSMENT as HELPSTRAL_DEFAULT,
     set_shared_state as helpstral_set_state,
@@ -188,7 +193,15 @@ class ConnectionManager:
                             delay = max(1.0, min(seg_dist / WALK_SPEED, 5.0))
                             await asyncio.sleep(delay)
 
-                    # Signal return phase
+                    # Demo user arrived at destination
+                    last_wp = escort_wps[-1] if escort_wps else {}
+                    await self.broadcast({
+                        "type": "user_arrived", "auto": True,
+                        "timestamp": time.time(),
+                        "lat": last_wp.get("lat"), "lng": last_wp.get("lng"),
+                    })
+                    _log_event("user_arrived", auto=True, source="demo")
+
                     try:
                         proc.stdin.write((json.dumps({"type": "phase", "phase": "return"}) + "\n").encode())
                         await proc.stdin.drain()
@@ -223,6 +236,9 @@ class ConnectionManager:
                     manager.connector_proc = None
                     _mission_in_progress = False
                     stop_autonomous_agent_loop()
+                    mid = _current_mission.get("mission_id", "") if _current_mission else ""
+                    if mid in _missions_history:
+                        _missions_history[mid].update(status="completed", ended_at=time.time())
                     if last_event and last_event.get("type") != "complete":
                         await self.broadcast({"type": "connector_died", "source": "ardupilot"})
                         await self.broadcast({"type": "complete", "source": "ardupilot"})
@@ -234,6 +250,7 @@ manager = ConnectionManager()
 _current_mission: dict | None = None
 _mission_in_progress: bool = False
 _mission_lock = asyncio.Lock()
+_missions_history: dict[str, dict] = {}  # mission_id -> mission summary
 
 def _http_client(**kwargs) -> httpx.AsyncClient:
     """Reusable HTTP client with sensible defaults."""
@@ -310,17 +327,35 @@ async def agent_loop(frame_b64: str) -> dict:
     )
     _latest_flystral = flystral_result
 
-    command = flystral_result.get("command", "FOLLOW")
-    param = str(flystral_result.get("param", "0.5"))
-    alt_adjust = flystral_result.get("altitude_adjust", 0)
+    flystral_mode = flystral_result.get("mode", "discrete")
 
-    if command in FLYSTRAL_VALID_COMMANDS:
-        ref = {"lat": 0.0, "lng": 0.0, "alt": 0.0}
-        updated = parse_to_waypoint_update(command, param, ref)
-        dlat = updated.get("lat", 0.0) - ref["lat"]
-        dlng = updated.get("lng", 0.0) - ref["lng"]
-        dalt = updated.get("alt", 0.0) - ref["alt"] + alt_adjust
-        await _send_to_connector({"type": "flystral_offset", "dlat": dlat, "dlng": dlng, "dalt": dalt})
+    if flystral_mode == "velocity":
+        offset = flystral_result.get("offset", {})
+        await _send_to_connector({
+            "type": "flystral_offset",
+            "dlat": offset.get("dlat", 0),
+            "dlng": offset.get("dlng", 0),
+            "dalt": offset.get("dalt", 0),
+            "dyaw": offset.get("dyaw", 0),
+            "velocity": {
+                "vx": flystral_result.get("vx", 0),
+                "vy": flystral_result.get("vy", 0),
+                "vz": flystral_result.get("vz", 0),
+                "yaw_rate": flystral_result.get("yaw_rate", 0),
+            },
+        })
+    else:
+        command = flystral_result.get("command", "FOLLOW")
+        param = str(flystral_result.get("param", "0.5"))
+        alt_adjust = flystral_result.get("altitude_adjust", 0)
+
+        if command in FLYSTRAL_VALID_COMMANDS:
+            ref = {"lat": 0.0, "lng": 0.0, "alt": 0.0}
+            updated = parse_to_waypoint_update(command, param, ref)
+            dlat = updated.get("lat", 0.0) - ref["lat"]
+            dlng = updated.get("lng", 0.0) - ref["lng"]
+            dalt = updated.get("alt", 0.0) - ref["alt"] + alt_adjust
+            await _send_to_connector({"type": "flystral_offset", "dlat": dlat, "dlng": dlng, "dalt": dalt})
 
     hs_tools = helpstral_result.get("tool_calls_made", [])
     fs_tools = flystral_result.get("tool_calls_made", [])
@@ -328,6 +363,7 @@ async def agent_loop(frame_b64: str) -> dict:
         "type": "agent_update",
         "helpstral": helpstral_result,
         "flystral": flystral_result,
+        "flystral_mode": flystral_mode,
         "tools_used": {
             "helpstral": [t["tool"] for t in hs_tools],
             "flystral": [t["tool"] for t in fs_tools],
@@ -364,7 +400,7 @@ async def _autonomous_agent_loop():
     try:
         while _mission_in_progress:
             try:
-                frame_b64 = _TEST_FRAME_B64
+                frame_b64 = _latest_camera_frame or _TEST_FRAME_B64
                 await agent_loop(frame_b64)
             except Exception as e:
                 _log_event("agent_loop_error", error=str(e))
@@ -441,6 +477,15 @@ async def websocket_endpoint(ws: WebSocket):
                 _latest_user_position.update({"lat": lat, "lng": lng})
                 await _send_to_connector({"type": "user_position", "lat": lat, "lng": lng})
             elif msg.get("type") == "user_arrived":
+                auto = msg.get("auto", False)
+                _log_event("user_arrived", auto=auto)
+                await manager.broadcast({
+                    "type": "user_arrived",
+                    "auto": auto,
+                    "timestamp": time.time(),
+                    "lat": _latest_user_position.get("lat"),
+                    "lng": _latest_user_position.get("lng"),
+                })
                 await _send_to_connector({"type": "phase", "phase": "return"})
             elif msg.get("type") == "emergency":
                 _log_event("emergency", origin=msg.get("origin"))
@@ -560,6 +605,26 @@ async def get_estimate(req: RouteRequest):
 
 # Minimal 1x1 grey JPEG for test/placeholder feed (e.g. when no real camera)
 _TEST_FRAME_B64 = "/9j/4AAQSkZJRgABAQEASABIAAD/2wBDAAMCAgMCAgMDAwMEAwMEBQgFBQQEBQoHBwYIDAoMDAsKCwsNDhIQDQ4RDgsLEBYQERMUFRUVDA8XGBYUGBIUFRT/wAALCAABAAEBAREA/8QAFAABAAAAAAAAAAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q=="
+_latest_camera_frame: str | None = None  # latest base64 JPEG from drone camera
+
+
+class CameraFrameRequest(BaseModel):
+    image_b64: str
+
+
+@app.post("/api/camera/frame")
+async def post_camera_frame(req: CameraFrameRequest):
+    """Accept a base64 JPEG frame from the drone camera. Used by companion computer or test harness."""
+    global _latest_camera_frame
+    _latest_camera_frame = req.image_b64
+    return {"status": "ok", "size": len(req.image_b64)}
+
+
+@app.get("/api/camera/latest", response_class=Response)
+async def get_latest_camera_frame():
+    """Return the latest camera frame as JPEG (for Mission Control display)."""
+    frame = _latest_camera_frame or _TEST_FRAME_B64
+    return Response(content=base64.b64decode(frame), media_type="image/jpeg")
 
 
 @app.get("/api/test-frame", response_class=Response)
@@ -616,7 +681,7 @@ async def get_route(req: RouteRequest):
     result = None
     try:
         async with _http_client() as client:
-            url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson"
+            url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson&steps=true&continue_straight=true&alternatives=false"
             resp = await client.get(url)
             resp.raise_for_status()
             data = resp.json()
@@ -708,7 +773,7 @@ async def order_drone(req: OrderRequest):
         lat2, lng2 = req.destination
         try:
             async with _http_client() as client:
-                url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson"
+                url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson&steps=true&continue_straight=true"
                 resp = await client.get(url)
                 resp.raise_for_status()
                 data = resp.json()
@@ -753,10 +818,24 @@ async def order_drone(req: OrderRequest):
         "files": files,
     }
 
+    mission_id = str(uuid.uuid4())[:8]
     _current_mission = {
+        "mission_id": mission_id,
         "mission": mission,
         "files": files,
         "broadcast": broadcast_msg,
+        "status": "planned",
+        "created_at": time.time(),
+    }
+    broadcast_msg["mission_id"] = mission_id
+
+    _missions_history[mission_id] = {
+        "mission_id": mission_id,
+        "status": "planned",
+        "created_at": time.time(),
+        "origin": list(req.origin),
+        "destination": list(req.destination),
+        "stats": mission["stats"],
     }
 
     await manager.broadcast({
@@ -765,7 +844,7 @@ async def order_drone(req: OrderRequest):
         "phase": "idle", "source": "hub_reset",
     })
     await manager.broadcast(broadcast_msg)
-    _log_event("mission_planned", waypoints=mission["stats"].get("total_waypoints"), hub_lat=DRONE_HUB["lat"])
+    _log_event("mission_planned", mission_id=mission_id, waypoints=mission["stats"].get("total_waypoints"), hub_lat=DRONE_HUB["lat"])
 
     # Calculate accurate price from mission waypoint distances
     escort_wps = mission["escort"]
@@ -846,8 +925,11 @@ async def start_mission_endpoint():
     await manager.broadcast({"type": "mission_started", "source": "ardupilot"})
     mission = _current_mission["mission"]
     total = len(mission["approach"]) + len(mission["escort"]) + len(mission["return"])
-    _log_event("mission_start", waypoints=total, mode="ardupilot")
-    return {"status": "started", "source": "ardupilot", "waypoints": total}
+    mid = _current_mission.get("mission_id", "")
+    if mid in _missions_history:
+        _missions_history[mid].update(status="active", started_at=time.time())
+    _log_event("mission_start", mission_id=mid, waypoints=total, mode="ardupilot")
+    return {"status": "started", "source": "ardupilot", "waypoints": total, "mission_id": mid}
 
 
 async def _start_mock_mission():
@@ -875,13 +957,19 @@ async def _start_mock_mission():
         finally:
             _mission_in_progress = False
             stop_autonomous_agent_loop()
+            mid = _current_mission.get("mission_id", "") if _current_mission else ""
+            if mid in _missions_history:
+                _missions_history[mid].update(status="completed", ended_at=time.time())
 
     if manager.sim_task and not manager.sim_task.done():
         manager.sim_task.cancel()
     manager.sim_task = asyncio.create_task(run_mock())
     await manager.broadcast({"type": "mission_started", "source": "mock"})
-    _log_event("mission_start", waypoints=total, mode="mock")
-    return {"status": "started", "source": "mock", "waypoints": total}
+    mid = _current_mission.get("mission_id", "")
+    if mid in _missions_history:
+        _missions_history[mid].update(status="active", started_at=time.time())
+    _log_event("mission_start", mission_id=mid, waypoints=total, mode="mock")
+    return {"status": "started", "source": "mock", "waypoints": total, "mission_id": mid}
 
 
 async def _force_cancel_mission():
@@ -897,7 +985,10 @@ async def _force_cancel_mission():
         manager.connector_proc.kill()
     _mission_in_progress = False
     stop_autonomous_agent_loop()
-    _log_event("mission_cancelled")
+    mid = _current_mission.get("mission_id", "") if _current_mission else ""
+    if mid in _missions_history:
+        _missions_history[mid].update(status="cancelled", ended_at=time.time())
+    _log_event("mission_cancelled", mission_id=mid)
 
 
 @app.post("/api/mission/cancel")
@@ -934,7 +1025,24 @@ async def mission_status():
         "altitude": _latest_telemetry.get("alt"),
         "threat_level": _latest_helpstral.get("threat_level", 1),
         "threat_status": _latest_helpstral.get("status", "SAFE"),
+        "mission_id": _current_mission.get("mission_id", "") if _current_mission else "",
     }
+
+
+@app.get("/api/missions")
+async def list_missions():
+    """List all missions (active + historical) for Mission Control overview."""
+    missions = []
+    for mid, m in _missions_history.items():
+        entry = dict(m)
+        if _current_mission and _current_mission.get("mission_id") == mid and _mission_in_progress:
+            entry["status"] = "active"
+            entry["phase"] = _latest_telemetry.get("phase", "idle")
+            entry["battery_pct"] = _latest_telemetry.get("battery_pct")
+            entry["ground_speed"] = _latest_telemetry.get("ground_speed")
+        missions.append(entry)
+    missions.sort(key=lambda x: x.get("created_at", 0), reverse=True)
+    return {"missions": missions, "total": len(missions)}
 
 
 async def _kill_existing_sitl():

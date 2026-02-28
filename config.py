@@ -7,11 +7,12 @@ load_dotenv()
 
 # Mistral API — use general models with advanced prompts; fine-tuned IDs can override via env
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
-MISTRAL_VISION_MODEL = os.getenv("MISTRAL_VISION_MODEL", "pixtral-12b-2409")  # vision for Helpstral/Flystral
-MISTRAL_GENERAL_MODEL = os.getenv("MISTRAL_GENERAL_MODEL", "mistral-large-latest")  # text/path decisions
+MISTRAL_VISION_MODEL = os.getenv("MISTRAL_VISION_MODEL", "pixtral-12b-2409")       # vision (Helpstral — accuracy-critical)
+MISTRAL_EDGE_MODEL = os.getenv("MISTRAL_EDGE_MODEL", "ministral-3b-latest")        # fast vision (Flystral — latency-critical)
+MISTRAL_GENERAL_MODEL = os.getenv("MISTRAL_GENERAL_MODEL", "mistral-large-latest") # text/path decisions
 MISTRAL_FAST_MODEL = os.getenv("MISTRAL_FAST_MODEL", "mistral-small-latest")       # fast conversational (Louise)
-HELPSTRAL_MODEL_ID = os.getenv("HELPSTRAL_MODEL_ID", MISTRAL_VISION_MODEL)
-FLYSTRAL_MODEL_ID = os.getenv("FLYSTRAL_MODEL_ID", MISTRAL_VISION_MODEL)
+HELPSTRAL_MODEL_ID = os.getenv("HELPSTRAL_MODEL_ID", MISTRAL_VISION_MODEL)         # overridden by fine-tuned ID
+FLYSTRAL_MODEL_ID = os.getenv("FLYSTRAL_MODEL_ID", MISTRAL_EDGE_MODEL)             # overridden by fine-tuned ID
 
 # Routing — OSRM public (no key needed), ORS as fallback
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1"

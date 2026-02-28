@@ -1018,8 +1018,35 @@
       });
     }
 
+    let _arrivalProximityStart = null;
+    const ARRIVAL_RADIUS_M = 30;
+    const ARRIVAL_DWELL_MS = 5000;
+    let _arrivalTriggered = false;
+
+    function _checkAutoArrival(lat, lng) {
+      if (_arrivalTriggered || !dest || !missionActive) return;
+      const d = haversine([lat, lng], dest);
+      if (d <= ARRIVAL_RADIUS_M) {
+        if (!_arrivalProximityStart) _arrivalProximityStart = Date.now();
+        if (Date.now() - _arrivalProximityStart >= ARRIVAL_DWELL_MS) {
+          _arrivalTriggered = true;
+          _arrivalProximityStart = null;
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'user_arrived', auto: true }));
+          }
+          stopLiveTracking();
+          document.getElementById('droneText').textContent = 'You arrived safely';
+          document.getElementById('droneSub').textContent = 'Drone returning to hub — mission complete';
+        }
+      } else {
+        _arrivalProximityStart = null;
+      }
+    }
+
     function startLiveTracking() {
       if (watchId != null) return;
+      _arrivalTriggered = false;
+      _arrivalProximityStart = null;
       if (!navigator.geolocation) {
         if (document.getElementById('stateActive').style.display !== 'none') {
           document.getElementById('droneSub').textContent = 'Location not supported — use a device with GPS.';
@@ -1032,6 +1059,7 @@
         function (pos) {
           document.getElementById('droneSub').style.color = '';
           if (document.getElementById('geoError')) document.getElementById('geoError').style.display = 'none';
+          _checkAutoArrival(pos.coords.latitude, pos.coords.longitude);
           if (ws && ws.readyState === WebSocket.OPEN) {
             var now = Date.now();
             if (now - lastPositionSend < 800) return;

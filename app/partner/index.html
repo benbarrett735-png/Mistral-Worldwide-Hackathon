@@ -221,6 +221,11 @@
       </div>
     </div>
 
+    <div class="section" id="missionsOverview">
+      <div class="section-title">Mission Overview <span id="missionCount" style="font-weight:400;font-size:12px;color:#888"></span></div>
+      <div id="missionsList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto"></div>
+    </div>
+
     <div class="section" id="missionSection" style="display:none">
       <div class="section-title">Active mission</div>
       <div class="mission-card" id="missionCard"></div>
@@ -310,6 +315,14 @@
       </div>
     </div>
 
+    <div class="section" id="cameraSection" style="display:none">
+      <div class="section-title">Camera Feed</div>
+      <div style="text-align:center">
+        <img id="cameraFeed" src="/api/camera/latest" alt="Drone camera" style="width:100%;max-width:320px;border-radius:6px;border:1px solid #eee;background:#000" />
+        <div id="cameraStatus" style="font-size:11px;color:#888;margin-top:4px">Updating every 3s</div>
+      </div>
+    </div>
+
     <div class="section" id="flightLogSection" style="display:none">
       <div class="section-title">Flight log <span style="font-size:0.55rem;color:#999;font-weight:400">(last 200 samples)</span></div>
       <div class="flight-log-wrap">
@@ -326,6 +339,7 @@
     </div>
 
     <div class="emergency-banner" id="emergencyBanner">EMERGENCY — USER DISTRESS DETECTED</div>
+    <div id="arrivalBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#059669;color:#fff;padding:14px 20px;font-size:14px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.2)"></div>
   </div>
 </div>
 
@@ -524,6 +538,7 @@
       case 'phase':           handlePhaseChange(msg.phase); break;
       case 'connector_died':  handleConnectorDied(); break;
       case 'complete':        handleComplete(); break;
+      case 'user_arrived':    handleUserArrived(msg); break;
       case 'emergency':       handleEmergency(msg); break;
       case 'sitl_log':        addLog(msg.message); appendArduPilotConsole(msg.message); break;
       case 'flystral':        handleFlystral(msg); break;
@@ -567,6 +582,7 @@
     document.getElementById('visionSection').style.display = '';
     document.getElementById('cameraSection').style.display = '';
     appendArduPilotConsole('Mission started');
+    startCameraRefresh();
   }
 
   function handleSitlStatus(msg) {
@@ -730,7 +746,7 @@
   function handleComplete() {
     if (currentPhase) { phaseDone.add(currentPhase); setBadge(currentPhase,'done'); }
     addLog('Mission complete — drone at hub');
-    stopCamera(); resetTelemetryAndVision();
+    stopCamera(); stopCameraRefresh(); resetTelemetryAndVision();
     if (hubPosition && droneMarker) {
       droneMarker.setLatLng([hubPosition.lat, hubPosition.lng]);
     }
@@ -854,6 +870,24 @@
     }
   }
 
+  function handleUserArrived(msg) {
+    const banner = document.getElementById('arrivalBanner');
+    const auto = msg.auto ? ' (auto-detected)' : '';
+    const locText = (msg.lat && msg.lng) ? ` at ${msg.lat.toFixed(5)}, ${msg.lng.toFixed(5)}` : '';
+    const t = msg.timestamp ? new Date(msg.timestamp * 1000).toLocaleTimeString() : new Date().toLocaleTimeString();
+    banner.style.display = 'block';
+    banner.innerHTML = `<strong>USER ARRIVED SAFELY</strong>${auto}${locText} <span style="font-size:12px;opacity:0.8">| ${t}</span>
+      <button onclick="this.parentElement.style.display='none'" style="float:right;background:#fff;color:#059669;border:1px solid #fff;padding:4px 12px;border-radius:4px;cursor:pointer;font-weight:600;margin-left:12px">OK</button>`;
+    addLog(`User arrived safely${auto}${locText}`, 'success');
+    setBadge('escort', 'done');
+    try {
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const o = ctx.createOscillator(); o.frequency.value = 523; o.type = 'sine';
+      const g = ctx.createGain(); g.gain.value = 0.3;
+      o.connect(g); g.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.3);
+    } catch(_){}
+  }
+
   function handleEmergency(msg) {
     const banner = document.getElementById('emergencyBanner');
     banner.style.display = 'block';
@@ -897,6 +931,55 @@
     entry.innerHTML = `<span class="ts">${now}</span>${msg}`;
     log.prepend(entry);
     while (log.children.length > 50) log.removeChild(log.lastChild);
+  }
+
+  async function refreshMissionsOverview() {
+    try {
+      const resp = await fetch('/api/missions');
+      if (!resp.ok) return;
+      const data = await resp.json();
+      const list = document.getElementById('missionsList');
+      const count = document.getElementById('missionCount');
+      const active = data.missions.filter(m => m.status === 'active').length;
+      count.textContent = `(${data.total} total, ${active} active)`;
+      if (!data.missions.length) {
+        list.innerHTML = '<div style="color:#888;font-size:12px;padding:6px 0">No missions yet</div>';
+        return;
+      }
+      list.innerHTML = data.missions.map(m => {
+        const statusColors = { active: '#059669', planned: '#2563eb', completed: '#6b7280', cancelled: '#dc2626' };
+        const c = statusColors[m.status] || '#888';
+        const t = m.created_at ? new Date(m.created_at * 1000).toLocaleTimeString('en-GB', { hour12: false }) : '';
+        const dist = m.stats?.escort_distance_km ? `${m.stats.escort_distance_km}km` : '';
+        const phase = m.phase ? ` — ${m.phase}` : '';
+        const batt = m.battery_pct != null ? ` | ${m.battery_pct}%` : '';
+        return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;background:#f9f9f9;border-radius:6px;font-size:12px;border-left:3px solid ${c}">
+          <div style="flex:1">
+            <strong style="font-size:11px;color:#333">${m.mission_id}</strong>
+            <span style="color:${c};font-weight:600;margin-left:6px;text-transform:uppercase;font-size:10px">${m.status}${phase}</span>
+            <div style="color:#888;margin-top:2px">${t} ${dist}${batt}</div>
+          </div>
+        </div>`;
+      }).join('');
+    } catch(_) {}
+  }
+
+  refreshMissionsOverview();
+  setInterval(refreshMissionsOverview, 5000);
+
+  let _cameraInterval = null;
+  function startCameraRefresh() {
+    if (_cameraInterval) return;
+    _cameraInterval = setInterval(() => {
+      const img = document.getElementById('cameraFeed');
+      const sec = document.getElementById('cameraSection');
+      if (img && sec && sec.style.display !== 'none') {
+        img.src = '/api/camera/latest?t=' + Date.now();
+      }
+    }, 3000);
+  }
+  function stopCameraRefresh() {
+    if (_cameraInterval) { clearInterval(_cameraInterval); _cameraInterval = null; }
   }
 </script>
 </body>

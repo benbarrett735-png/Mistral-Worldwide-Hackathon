@@ -15,7 +15,13 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import FLYSTRAL_MODEL_ID, MISTRAL_API_KEY, MISTRAL_VISION_MODEL
-from flystral.command_parser import VALID_COMMANDS
+from flystral.command_parser import VALID_COMMANDS, parse_velocity_output
+
+FINETUNED_PROMPT = (
+    "Analyze this drone camera image. Output a JSON velocity command: "
+    "{\"vx\": forward_speed, \"vy\": lateral_speed, \"vz\": vertical_speed, \"yaw_rate\": turn_rate}. "
+    "Positive vx = forward, positive vy = right, positive vz = up. Values in m/s, yaw in deg/s."
+)
 
 SYSTEM_PROMPT = (
     "You are Flystral, a drone autopilot AI for a safety escort drone.\n\n"
@@ -85,6 +91,13 @@ DEFAULT_RESULT = {
     "altitude_adjust": 0,
     "next_check": "Await next frame",
 }
+
+DEFAULT_VELOCITY = {"vx": 2.0, "vy": 0.0, "vz": 0.0, "yaw_rate": 0.0}
+
+
+def _is_finetuned_model(model_id: str) -> bool:
+    """Check if the model ID indicates a fine-tuned model (not a base model)."""
+    return model_id.startswith("ft:") if model_id else False
 
 # ── Shared state (set by server.py) ──────────────────────────────────────────
 
@@ -192,16 +205,76 @@ def parse_structured_command(raw: str) -> dict:
 MAX_TOOL_ROUNDS = 3
 
 
+def _run_finetuned(image_b64: str, heading_rad: float = 0.0) -> dict:
+    """
+    Fast path for the fine-tuned Flystral model (trained on AirSim velocity data).
+    Single inference call — no tools, no multi-turn. The model outputs
+    body-frame velocities directly from the camera image.
+    """
+    from mistralai import Mistral
+    client = Mistral(api_key=MISTRAL_API_KEY)
+    model = FLYSTRAL_MODEL_ID
+
+    response = client.chat.complete(
+        model=model,
+        messages=[
+            {"role": "system", "content": FINETUNED_PROMPT},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                    {"type": "text", "text": "Output velocity command for this frame."},
+                ],
+            },
+        ],
+        max_tokens=150,
+        temperature=0.0,
+    )
+
+    raw = (response.choices[0].message.content or "").strip()
+
+    try:
+        text = raw
+        if text.startswith("```"):
+            lines = text.split("\n")
+            text = "\n".join(l for l in lines if not l.strip().startswith("```"))
+        start = text.find("{")
+        end = text.rfind("}") + 1
+        vel = json.loads(text[start:end]) if start >= 0 and end > start else {}
+    except (json.JSONDecodeError, ValueError):
+        vel = dict(DEFAULT_VELOCITY)
+
+    offset = parse_velocity_output(vel, heading_rad)
+
+    return {
+        "mode": "velocity",
+        "vx": offset["vx"],
+        "vy": offset["vy"],
+        "vz": offset["vz"],
+        "yaw_rate": offset["yaw_rate"],
+        "offset": offset,
+        "raw": raw,
+        "model": model,
+        "timestamp": time.time(),
+        "tool_calls_made": [],
+        "source": "finetuned",
+    }
+
+
 def run_flystral_agent(
     image_b64: str,
     threat_assessment: dict | None = None,
     telemetry: dict | None = None,
     route_progress: float | None = None,
+    heading_rad: float = 0.0,
 ) -> dict:
     """
-    Run Flystral as a real agent: the model decides which tools to call,
-    queries drone telemetry and Helpstral's assessment, then produces
-    an adaptive flight command.
+    Run Flystral. Two modes:
+      1. Fine-tuned model (ft:*) — single-shot velocity vector inference from camera image.
+         Sub-second latency, no tool calls. The model was trained on AirSim drone imagery
+         to output [vx, vy, vz, yaw_rate] directly.
+      2. Base model — agentic mode with tool calls for telemetry, threat assessment,
+         and route progress, producing discrete flight commands.
     """
     set_shared_state(
         telemetry or {},
@@ -209,8 +282,11 @@ def run_flystral_agent(
         route_progress,
     )
 
+    model = FLYSTRAL_MODEL_ID or MISTRAL_VISION_MODEL
+
     if not MISTRAL_API_KEY:
         result = dict(DEFAULT_RESULT)
+        result["mode"] = "discrete"
         tl = (threat_assessment or {}).get("threat_level", 1)
         if tl >= 8:
             result.update(command="HOVER", param="10", altitude_adjust=-15,
@@ -221,6 +297,9 @@ def run_flystral_agent(
         result["source"] = "no_key_fallback"
         result["tool_calls_made"] = []
         return result
+
+    if _is_finetuned_model(model):
+        return _run_finetuned(image_b64, heading_rad)
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},
@@ -242,8 +321,6 @@ def run_flystral_agent(
         from mistralai import Mistral
         client = Mistral(api_key=MISTRAL_API_KEY)
 
-        model = FLYSTRAL_MODEL_ID or MISTRAL_VISION_MODEL
-
         for _round in range(MAX_TOOL_ROUNDS + 1):
             response = client.chat.complete(
                 model=model,
@@ -259,6 +336,7 @@ def run_flystral_agent(
             if not msg.tool_calls:
                 raw = (msg.content or "").strip()
                 result = parse_structured_command(raw)
+                result["mode"] = "discrete"
                 result["timestamp"] = time.time()
                 result["tool_calls_made"] = tool_calls_made
                 return result
@@ -285,9 +363,10 @@ def run_flystral_agent(
 
         raw = (msg.content or "").strip() if msg else ""
         result = parse_structured_command(raw)
+        result["mode"] = "discrete"
         result["timestamp"] = time.time()
         result["tool_calls_made"] = tool_calls_made
         return result
 
     except Exception as e:
-        return {**DEFAULT_RESULT, "error": str(e), "timestamp": time.time(), "tool_calls_made": tool_calls_made}
+        return {**DEFAULT_RESULT, "mode": "discrete", "error": str(e), "timestamp": time.time(), "tool_calls_made": tool_calls_made}
