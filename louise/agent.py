@@ -34,7 +34,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_route_safety",
-            "description": "Analyze safety of a walking route between two points. Returns lighting quality, foot traffic level, known incident areas, and an overall safety score.",
+            "description": "Analyze safety of a walking route by sampling 5 points along it. Queries real OpenStreetMap data: streetlight density, lit/unlit road ratio, nearby POIs. Returns per-segment scores, the weakest segment, and a recommendation.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -59,7 +59,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_area_info",
-            "description": "Get information about a specific area: neighborhood name, area type, typical foot traffic, lighting quality, and safety notes.",
+            "description": "Query real OpenStreetMap data for a location: reverse-geocoded neighborhood name, streetlight count, lit road ratio, POI density, emergency service proximity, and composite safety score.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -101,22 +101,13 @@ def set_shared_state(escort: dict, user_pos: dict):
 # ── Tool implementations ─────────────────────────────────────────────────────
 
 def tool_get_route_safety(from_lat: float, from_lng: float, to_lat: float, to_lng: float) -> str:
-    hour = datetime.now().hour
-    is_night = hour < 6 or hour >= 20
-
-    central = (48.85 <= from_lat <= 48.87) and (48.85 <= to_lat <= 48.87)
-    score = 8 if central else 6
-    if is_night:
-        score -= 2
-    score = max(1, min(10, score))
-
-    return json.dumps({
-        "safety_score": score,
-        "lighting": "good" if central else "moderate",
-        "foot_traffic": "low" if is_night else "moderate",
-        "estimated_walk_minutes": int(abs(to_lat - from_lat) * 111000 / 80),
-        "recommendation": "Route looks safe" if score >= 6 else "Consider requesting a drone escort",
-    })
+    """Query real OSM data along the route: samples 5 points for streetlights, lit roads, POIs."""
+    try:
+        from geo_intel import compute_route_safety
+        data = compute_route_safety(from_lat, from_lng, to_lat, to_lng)
+        return json.dumps(data)
+    except Exception as e:
+        return json.dumps({"safety_score": 5, "error": str(e), "recommendation": "Unable to analyze route"})
 
 
 def tool_get_escort_status() -> str:
@@ -133,28 +124,23 @@ def tool_get_escort_status() -> str:
 
 
 def tool_get_area_info(lat: float, lng: float) -> str:
-    if 48.855 <= lat <= 48.865 and 2.33 <= lng <= 2.35:
-        name, area_type = "Louvre / Tuileries", "Major landmark area"
-        traffic, lighting = "high", "excellent"
-        notes = "Tourist area, well-patrolled, many cameras"
-    elif 48.845 <= lat <= 48.855 and 2.34 <= lng <= 2.36:
-        name, area_type = "Saint-Germain-des-Pres", "Historic commercial district"
-        traffic, lighting = "moderate", "good"
-        notes = "Lively area with restaurants and shops"
-    elif 48.87 <= lat <= 48.88:
-        name, area_type = "Montmartre", "Residential / tourist"
-        traffic, lighting = "moderate", "moderate"
-        notes = "Hilly area, some quieter side streets"
-    else:
-        name, area_type = "Paris residential", "Urban residential"
-        traffic, lighting = "low", "moderate"
-        notes = "Standard residential area"
-
-    return json.dumps({
-        "neighborhood": name, "area_type": area_type,
-        "typical_foot_traffic": traffic, "lighting_quality": lighting,
-        "safety_notes": notes,
-    })
+    """Query real OSM data: neighborhood name, streetlight density, POI types, safety score."""
+    try:
+        from geo_intel import compute_area_safety_score
+        data = compute_area_safety_score(lat, lng)
+        return json.dumps({
+            "neighborhood": data.get("neighborhood", "Unknown"),
+            "road": data.get("road", "Unknown"),
+            "safety_score": data.get("safety_score", 5),
+            "lighting_quality": data.get("lighting_quality", "unknown"),
+            "streetlights_nearby": data.get("streetlights_nearby", 0),
+            "foot_traffic": data.get("foot_traffic_level", "unknown"),
+            "pois_nearby": data.get("pois_nearby", 0),
+            "emergency_services": data.get("emergency_services_nearby", 0),
+            "time_of_day": data.get("time_of_day", "unknown"),
+        })
+    except Exception as e:
+        return json.dumps({"neighborhood": "Unknown", "error": str(e)})
 
 
 def tool_get_safety_tips(context: str) -> str:

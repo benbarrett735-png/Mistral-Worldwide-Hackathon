@@ -21,17 +21,27 @@ from config import HELPSTRAL_MODEL_ID, MISTRAL_API_KEY, MISTRAL_VISION_MODEL
 SYSTEM_PROMPT = (
     "You are Helpstral, a safety AI monitoring a drone escort camera feed protecting a person "
     "walking alone at night.\n\n"
-    "You have tools available. Use them to gather context before making your assessment:\n"
-    "- get_location_context: understand the area type and lighting\n"
-    "- get_recent_assessments: check your previous assessments for patterns\n"
-    "- escalate_emergency: trigger an alert if you detect real danger (threat_level >= 8)\n\n"
-    "After using tools (or if none are needed), produce your final answer as a JSON object with:\n"
-    "- threat_level: integer 1-10\n"
+    "PROCESS — follow these steps:\n"
+    "1. Call get_location_context to query real streetlight density, lit road data, and POIs from OpenStreetMap\n"
+    "2. Call get_recent_assessments to review your sliding memory window for temporal patterns\n"
+    "3. Analyze the image: identify people, their distance/trajectory relative to the user, "
+    "lighting conditions visible in frame, obstacles, and environmental threats\n"
+    "4. Cross-reference what you see with what the location data tells you — if OSM says "
+    "4 streetlights but the image looks dark, the lights may be broken\n"
+    "5. If threat_level >= 8, call escalate_emergency before responding\n\n"
+    "MULTI-FRAME REASONING — you are not classifying a single image. You are tracking a situation "
+    "over time. When reviewing recent assessments, look for:\n"
+    "- Is a person getting closer frame-over-frame? (closing distance = potential follower)\n"
+    "- Has the lighting environment changed? (user entering darker area)\n"
+    "- Has the user's pace changed? (running = fleeing, stopped = potential problem)\n"
+    "- Is the same individual appearing across multiple frames? (persistent presence)\n\n"
+    "Final answer MUST be a JSON object:\n"
+    "- threat_level: integer 1-10 (evidence-based, not just vibes)\n"
     "- status: SAFE, CAUTION, or DISTRESS\n"
-    "- observations: array of 2-4 strings describing what you see\n"
-    "- pattern: string describing patterns across recent assessments\n"
-    "- reasoning: 1-2 sentence explanation\n"
-    "- action: one of CONTINUE_MONITORING, INCREASE_SCAN_RATE, ALERT_USER, ACTIVATE_SPOTLIGHT, EMERGENCY_HOVER"
+    "- observations: array of 2-4 specific strings (what you actually see, not generic)\n"
+    "- pattern: string describing temporal patterns from memory (or 'First assessment' if no history)\n"
+    "- reasoning: 2-3 sentences connecting image evidence + location data + temporal patterns\n"
+    "- action: CONTINUE_MONITORING, INCREASE_SCAN_RATE, ALERT_USER, ACTIVATE_SPOTLIGHT, or EMERGENCY_HOVER"
 )
 
 TOOLS = [
@@ -39,7 +49,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "get_location_context",
-            "description": "Get area type, lighting estimate, and time of day for the user's current GPS position. Call this to understand the environment.",
+            "description": "Query real OpenStreetMap data for the user's position: streetlight count within 300m, lit/unlit road ratio, nearby POIs (restaurants, shops, emergency services), reverse-geocoded neighborhood name, and a composite safety score. Use this to understand the real environment.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -107,23 +117,30 @@ def set_shared_state(history: list[dict], user_pos: dict):
 
 
 def tool_get_location_context(lat: float, lng: float) -> str:
-    hour = datetime.now().hour
-    time_of_day = "night" if hour < 6 or hour >= 20 else "evening" if hour >= 17 else "day"
-    lighting = "low" if time_of_day == "night" else "moderate" if time_of_day == "evening" else "good"
-
-    if 48.85 <= lat <= 48.87 and 2.33 <= lng <= 2.35:
-        area_type = "central Paris — tourist area, well-lit main roads"
-    elif 48.87 <= lat <= 48.89:
-        area_type = "northern Paris — mixed residential and commercial"
-    elif 48.83 <= lat <= 48.85:
-        area_type = "southern Paris — quiet residential"
-    else:
-        area_type = "urban residential area"
-
-    return json.dumps({
-        "area_type": area_type, "lighting_estimate": lighting,
-        "time_of_day": time_of_day, "hour": hour,
-    })
+    """Query real OSM data: streetlight count, lit road ratio, POIs, neighborhood name."""
+    try:
+        from geo_intel import compute_area_safety_score
+        data = compute_area_safety_score(lat, lng)
+        return json.dumps({
+            "neighborhood": data.get("neighborhood", "Unknown"),
+            "road": data.get("road", "Unknown"),
+            "safety_score": data.get("safety_score", 5),
+            "lighting_quality": data.get("lighting_quality", "unknown"),
+            "streetlights_within_300m": data.get("streetlights_nearby", 0),
+            "lit_roads": data.get("lit_roads", {}),
+            "foot_traffic": data.get("foot_traffic_level", "unknown"),
+            "pois_nearby": data.get("pois_nearby", 0),
+            "emergency_services_nearby": data.get("emergency_services_nearby", 0),
+            "time_of_day": data.get("time_of_day", "unknown"),
+            "scoring": data.get("scoring_breakdown", {}),
+        })
+    except Exception as e:
+        hour = datetime.now().hour
+        return json.dumps({
+            "neighborhood": "Unknown", "safety_score": 5,
+            "lighting_quality": "unknown", "time_of_day": "night" if hour < 6 or hour >= 20 else "day",
+            "error": str(e),
+        })
 
 
 def tool_get_recent_assessments() -> str:
@@ -157,7 +174,7 @@ TOOL_DISPATCH = {
 
 
 def get_location_context(lat: float, lng: float) -> dict:
-    """Public helper for server.py backwards compat."""
+    """Public helper — returns real OSM-based area context."""
     return json.loads(tool_get_location_context(lat, lng))
 
 
