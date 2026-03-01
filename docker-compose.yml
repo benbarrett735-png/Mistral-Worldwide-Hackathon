@@ -1,0 +1,23 @@
+version: "3.9"
+
+services:
+  louise:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      - MISTRAL_API_KEY=${MISTRAL_API_KEY}
+      - FLYSTRAL_ENDPOINT=${FLYSTRAL_ENDPOINT}
+      - HELPSTRAL_ENDPOINT=${HELPSTRAL_ENDPOINT}
+      - MAV_CONNECTION=${MAV_CONNECTION:-}
+      - DEFAULT_CITY=${DEFAULT_CITY:-paris}
+      - ORS_API_KEY=${ORS_API_KEY:-}
+      - ARMING_CHECK=${ARMING_CHECK:-0}
+    volumes:
+      - ./autopilot_adapter/output:/app/autopilot_adapter/output
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3

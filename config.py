@@ -5,16 +5,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Mistral API
+# Mistral API (Louise conversational agent)
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
-MISTRAL_VISION_MODEL = os.getenv("MISTRAL_VISION_MODEL", "pixtral-12b-2409")       # Helpstral base
-MISTRAL_EDGE_MODEL = os.getenv("MISTRAL_EDGE_MODEL", "ministral-3b-latest")        # Flystral base (fast vision)
 MISTRAL_GENERAL_MODEL = os.getenv("MISTRAL_GENERAL_MODEL", "mistral-large-latest") # text/path decisions
 MISTRAL_FAST_MODEL = os.getenv("MISTRAL_FAST_MODEL", "mistral-small-latest")       # Louise chat
 
-# Fine-tuned model endpoints (served from HuggingFace models via Colab GPU)
+# Fine-tuned model endpoints (served from HuggingFace via Colab GPU + ngrok)
 # Flystral: BenBarr/flystral — LoRA fine-tuned Ministral 3B
-# Helpstral: (HuggingFace model, served similarly)
+# Helpstral: BenBarr/helpstral — LoRA fine-tuned Pixtral 12B
 FLYSTRAL_ENDPOINT = os.getenv("FLYSTRAL_ENDPOINT", "")
 HELPSTRAL_ENDPOINT = os.getenv("HELPSTRAL_ENDPOINT", "")
 
@@ -53,8 +51,8 @@ CITY_HUBS = {
         "zoom": 13,
     },
     "kilcoole": {
-        "name": "Kilcoole (Demo Site)",
-        "hub": {"lat": 53.1076, "lng": -6.0483, "label": "Louise Drone Centre — Kilcoole, Wicklow (Demo Site)"},
+        "name": "Kilcoole",
+        "hub": {"lat": 53.1076, "lng": -6.0483, "label": "Louise Drone Centre — Kilcoole, Wicklow"},
         "center": {"lat": 53.1076, "lng": -6.0483},
         "bounds": {"lat_min": 53.07, "lat_max": 53.14, "lng_min": -6.12, "lng_max": -6.00},
         "country": "ie",
@@ -78,14 +76,14 @@ CURRENCY = os.getenv("PRICE_CURRENCY", "EUR")
 SIMULATE_BATTERY = os.getenv("SIMULATE_BATTERY", "1").strip().lower() in ("1", "true", "yes")
 SIMULATED_BATTERY_START_PCT = int(os.getenv("SIMULATED_BATTERY_START_PCT", "100"))
 
-# Flight parameters
+# Flight parameters — tuned for sub-250g FPV with ArduPilot (~15 m/s typical max)
 HUB_TO_USER_ALT = 60   # metres AGL — approach (higher, faster transit)
 TRACK_ALT = 25         # metres AGL — escort altitude (live follow)
 HOME_ALT = 60          # metres AGL — return altitude
 TAKEOFF_ALT = 10       # metres AGL — initial takeoff
-APPROACH_RETURN_SPEED = 50  # m/s — to/from user and return to hub (fast)
-ESCORT_SPEED = 12      # m/s — during live follow (smooth, safe)
-CRUISE_SPEED = 50      # m/s — used for ETA; actual speed set per-phase in connector
+APPROACH_RETURN_SPEED = float(os.getenv("APPROACH_RETURN_SPEED", "15"))   # m/s — realistic for sub-250g (SITL uses 5x sim speedup)
+ESCORT_SPEED = float(os.getenv("ESCORT_SPEED", "5"))   # m/s — escort phase (slightly faster than walking ~1.4 m/s)
+CRUISE_SPEED = 15      # m/s — used for ETA
 LOITER_RADIUS = 0      # 0 = straight lines (copter mode)
 FOLLOW_DISTANCE_M = 15 # metres behind user during live escort
 
@@ -95,6 +93,8 @@ SITL_PORT = int(os.getenv("SITL_PORT", "5760"))
 # For real drone: set MAV_CONNECTION e.g. tcp:192.168.1.10:5760 or serial:/dev/ttyUSB0:57600
 # When MAV_CONNECTION is set: server skips SITL start and EKF wait; connector uses this string.
 MAV_CONNECTION = os.getenv("MAV_CONNECTION") or None
+# ARMING_CHECK: 0 = disabled (SITL only). For real hardware, set ARMING_CHECK=1 for safety.
+ARMING_CHECK = int(os.getenv("ARMING_CHECK", "0"))
 if MAV_CONNECTION is not None:
     MAV_CONNECTION = MAV_CONNECTION.strip() or None
 
@@ -102,7 +102,7 @@ if MAV_CONNECTION is not None:
 def _env_warnings():
     """Log warnings for common config issues (call once at app startup if desired)."""
     import sys
-    if MAV_CONNECTION and not MISTRAL_API_KEY:
-        print("Config: MAV_CONNECTION is set (real drone) but MISTRAL_API_KEY is missing; Helpstral/Flystral will use fallbacks.", file=sys.stderr)
-    if not MISTRAL_API_KEY:
-        print("Config: MISTRAL_API_KEY not set; vision APIs will return safe fallbacks.", file=sys.stderr)
+    if not HELPSTRAL_ENDPOINT:
+        print("Config: HELPSTRAL_ENDPOINT not set; run helpstral/serve_colab.ipynb and set in .env.", file=sys.stderr)
+    if not FLYSTRAL_ENDPOINT:
+        print("Config: FLYSTRAL_ENDPOINT not set; run flystral/serve_colab.ipynb and set in .env.", file=sys.stderr)

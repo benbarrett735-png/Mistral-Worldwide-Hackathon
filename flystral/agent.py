@@ -1,11 +1,8 @@
 """
-Flystral Agent — drone flight controller powered by Mistral.
+Flystral Agent — drone flight controller. Uses fine-tuned model only.
 
-Two inference modes:
-  1. Fine-tuned model (BenBarr/flystral on HuggingFace) served via FLYSTRAL_ENDPOINT
-     — LoRA fine-tuned Ministral 3B, outputs telemetry vectors from camera images.
-  2. Base model fallback (ministral-3b-latest via Mistral API)
-     — agentic mode with function calling for telemetry, threat, and route tools.
+BenBarr/flystral (HuggingFace) served via FLYSTRAL_ENDPOINT — LoRA fine-tuned
+Ministral 3B for telemetry prediction from camera images. No fallback.
 """
 
 from __future__ import annotations
@@ -16,7 +13,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import MISTRAL_API_KEY, MISTRAL_EDGE_MODEL, FLYSTRAL_ENDPOINT
+from config import FLYSTRAL_ENDPOINT
 from flystral.command_parser import VALID_COMMANDS, parse_velocity_output
 
 SYSTEM_PROMPT = (
@@ -239,105 +236,28 @@ def run_flystral_agent(
     route_progress: float | None = None,
     heading_rad: float = 0.0,
 ) -> dict:
-    """
-    Run Flystral. Priority:
-      1. Fine-tuned endpoint (FLYSTRAL_ENDPOINT) — BenBarr/flystral LoRA on Colab GPU
-      2. Base model fallback (ministral-3b-latest) — agentic mode via Mistral API
-    """
+    """Run Flystral via fine-tuned endpoint only (BenBarr/flystral)."""
     set_shared_state(
         telemetry or {},
         threat_assessment or {},
         route_progress,
     )
 
-    if FLYSTRAL_ENDPOINT:
-        try:
-            return _run_remote_endpoint(image_b64, heading_rad)
-        except Exception as e:
-            print(f"[Flystral] Endpoint failed, falling back to base model: {e}")
-
-    if not MISTRAL_API_KEY:
+    if not FLYSTRAL_ENDPOINT:
         result = dict(DEFAULT_RESULT)
-        result["mode"] = "discrete"
-        tl = (threat_assessment or {}).get("threat_level", 1)
-        if tl >= 8:
-            result.update(command="HOVER", param="10", altitude_adjust=-15,
-                          reasoning="DISTRESS detected — hovering above user.")
-        elif tl >= 5:
-            result.update(param="0.3", altitude_adjust=-5,
-                          reasoning="Caution — slowing and lowering altitude.")
-        result["source"] = "no_key_fallback"
+        result["source"] = "endpoint_required"
+        result["tool_calls_made"] = []
+        result["reasoning"] = "FLYSTRAL_ENDPOINT not set. Run flystral/serve_colab.ipynb and set in .env."
+        return result
+
+    try:
+        return _run_remote_endpoint(image_b64, heading_rad)
+    except Exception as e:
+        print(f"[Flystral] Endpoint failed: {e}")
+        result = dict(DEFAULT_RESULT)
+        result["source"] = "endpoint_error"
+        result["error"] = str(e)
         result["tool_calls_made"] = []
         return result
 
-    model = MISTRAL_EDGE_MODEL
 
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                {"type": "text", "text": (
-                    "Analyze this drone camera frame. Use your tools to check telemetry, "
-                    "threat status, and route progress, then decide the next flight action as JSON."
-                )},
-            ],
-        },
-    ]
-
-    tool_calls_made = []
-
-    try:
-        from mistralai import Mistral
-        client = Mistral(api_key=MISTRAL_API_KEY)
-
-        for _round in range(MAX_TOOL_ROUNDS + 1):
-            response = client.chat.complete(
-                model=model,
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                max_tokens=600,
-                temperature=0.1,
-            )
-
-            msg = response.choices[0].message
-
-            if not msg.tool_calls:
-                raw = (msg.content or "").strip()
-                result = parse_structured_command(raw)
-                result["mode"] = "discrete"
-                result["timestamp"] = time.time()
-                result["tool_calls_made"] = tool_calls_made
-                return result
-
-            messages.append(msg)
-
-            for tc in msg.tool_calls:
-                fn_name = tc.function.name
-                fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                tool_calls_made.append({"tool": fn_name, "args": fn_args})
-
-                executor = TOOL_DISPATCH.get(fn_name)
-                if executor:
-                    fn_result = executor(fn_args)
-                else:
-                    fn_result = json.dumps({"error": f"Unknown tool: {fn_name}"})
-
-                messages.append({
-                    "role": "tool",
-                    "name": fn_name,
-                    "content": fn_result,
-                    "tool_call_id": tc.id,
-                })
-
-        raw = (msg.content or "").strip() if msg else ""
-        result = parse_structured_command(raw)
-        result["mode"] = "discrete"
-        result["timestamp"] = time.time()
-        result["tool_calls_made"] = tool_calls_made
-        return result
-
-    except Exception as e:
-        return {**DEFAULT_RESULT, "mode": "discrete", "error": str(e), "timestamp": time.time(), "tool_calls_made": tool_calls_made}

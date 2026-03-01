@@ -26,6 +26,7 @@ from pydantic import BaseModel
 sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
+    APPROACH_RETURN_SPEED,
     BASE_PRICE_EUR,
     CITY_HUBS,
     CURRENCY,
@@ -114,9 +115,7 @@ _env_warnings()
 
 # ── Static file serving ────────────────────────────────────────────────────────
 Path("autopilot_adapter/output").mkdir(parents=True, exist_ok=True)
-Path("demo_video").mkdir(parents=True, exist_ok=True)
 app.mount("/autopilot_adapter/output", StaticFiles(directory="autopilot_adapter/output"), name="output")
-app.mount("/demo_video", StaticFiles(directory="demo_video"), name="demo_video")
 app.mount("/user", StaticFiles(directory="app/user", html=True), name="user")
 app.mount("/partner", StaticFiles(directory="app/partner", html=True), name="partner")
 
@@ -198,56 +197,6 @@ class ConnectionManager:
 
                 asyncio.create_task(relay_stderr())
 
-                # Feed demo user positions (escort waypoints at walking speed)
-                # so SITL's live_follow_loop has positions to track
-                async def feed_demo_positions():
-                    await asyncio.sleep(5)  # wait for approach to start
-                    mission_data = _current_mission.get("mission", {}) if _current_mission else {}
-                    escort_wps = mission_data.get("escort", [])
-                    if not escort_wps:
-                        return
-                    # Wait until approach is done (phase changes to escort)
-                    for _ in range(300):  # max 5 min wait
-                        if _latest_telemetry.get("phase") == "escort":
-                            break
-                        await asyncio.sleep(1)
-                    else:
-                        return
-
-                    WALK_SPEED = 1.4  # m/s
-                    for i, wp in enumerate(escort_wps):
-                        if proc.returncode is not None:
-                            return
-                        msg = json.dumps({"type": "user_position", "lat": wp["lat"], "lng": wp["lng"]}) + "\n"
-                        try:
-                            proc.stdin.write(msg.encode())
-                            await proc.stdin.drain()
-                        except (BrokenPipeError, OSError):
-                            return
-                        await self.broadcast({"type": "user_position", "lat": wp["lat"], "lng": wp["lng"], "source": "demo"})
-
-                        if i + 1 < len(escort_wps):
-                            seg_dist = wp_haversine(wp["lat"], wp["lng"], escort_wps[i+1]["lat"], escort_wps[i+1]["lng"])
-                            delay = max(1.0, min(seg_dist / WALK_SPEED, 5.0))
-                            await asyncio.sleep(delay)
-
-                    # Demo user arrived at destination
-                    last_wp = escort_wps[-1] if escort_wps else {}
-                    await self.broadcast({
-                        "type": "user_arrived", "auto": True,
-                        "timestamp": time.time(),
-                        "lat": last_wp.get("lat"), "lng": last_wp.get("lng"),
-                    })
-                    _log_event("user_arrived", auto=True, source="demo")
-
-                    try:
-                        proc.stdin.write((json.dumps({"type": "phase", "phase": "return"}) + "\n").encode())
-                        await proc.stdin.drain()
-                    except (BrokenPipeError, OSError):
-                        pass
-
-                asyncio.create_task(feed_demo_positions())
-
                 last_event = None
                 try:
                     while proc.stdout:
@@ -274,7 +223,6 @@ class ConnectionManager:
                     manager.connector_proc = None
                     _mission_in_progress = False
                     stop_autonomous_agent_loop()
-                    stop_demo_replay()
                     mid = _current_mission.get("mission_id", "") if _current_mission else ""
                     if mid in _missions_history:
                         _missions_history[mid].update(status="completed", ended_at=time.time())
@@ -304,6 +252,7 @@ _latest_flystral: dict = dict(FLYSTRAL_DEFAULT)
 _latest_telemetry: dict = {}
 _latest_user_position: dict = {}
 _ASSESSMENT_WINDOW = 10
+_MIN_IMAGE_BYTES = 500  # reject placeholders — real camera frames from ArduPilot
 
 
 _pending_escalations: list[dict] = []
@@ -1038,7 +987,7 @@ async def order_drone(req: OrderRequest):
                      approach_wps[i+1]["lat"], approach_wps[i+1]["lng"])
         for i in range(len(approach_wps) - 1)
     ) if len(approach_wps) > 1 else 0
-    approach_eta_s = round(approach_dist / 50)  # approach at 50 m/s
+    approach_eta_s = round(approach_dist / APPROACH_RETURN_SPEED) if APPROACH_RETURN_SPEED > 0 else 60
 
     routes = {
         "approach": [[w["lat"], w["lng"]] for w in mission["approach"]],
@@ -1114,14 +1063,12 @@ async def order_drone(req: OrderRequest):
     }
 
 
-# ── /api/mission/start — begin flight (ArduPilot SITL always, mock fallback) ──
+# ── /api/mission/start — begin flight (ArduPilot SITL or real hardware) ──
 @app.post("/api/mission/start")
 async def start_mission_endpoint():
     """
-    Start the mission flight. Always uses ArduPilot SITL.
-    - If MAV_CONNECTION is set: uses real drone hardware directly
-    - Otherwise: starts ArduPilot SITL if not already running
-    - Falls back to mock simulator only if ArduCopter binary not found
+    Start the mission flight. Uses ArduPilot SITL or real drone via MAV_CONNECTION.
+    Requires ArduCopter binary for SITL — no mock fallback.
     """
     global _sitl_warm, _sitl_city
     if _current_mission is None:
@@ -1152,8 +1099,11 @@ async def start_mission_endpoint():
                 _log_event("sitl_start_failed", error=str(e))
 
             if not sitl_running:
-                _log_event("sitl_fallback_to_mock")
-                return await _start_mock_mission()
+                _log_event("sitl_start_failed", error=str(e))
+                raise HTTPException(
+                    status_code=503,
+                    detail="ArduPilot SITL failed to start. Install ArduCopter or set MAV_CONNECTION for real hardware.",
+                )
 
         if _sitl_warm and _sitl_city == mission_city:
             await manager.broadcast({"type": "sitl_status", "status": "running"})
@@ -1183,59 +1133,8 @@ async def start_mission_endpoint():
     if mid in _missions_history:
         _missions_history[mid].update(status="active", started_at=time.time())
 
-    if mission_city == "kilcoole" and _DEMO_EVENTS_PATH.exists():
-        start_demo_replay()
-        await manager.broadcast({"type": "demo_mode", "active": True, "video": _DEMO_VIDEO_PATH.exists()})
-
     _log_event("mission_start", mission_id=mid, waypoints=total, mode="ardupilot")
     return {"status": "started", "source": "ardupilot", "waypoints": total, "mission_id": mid}
-
-
-async def _start_mock_mission():
-    """Run the mock simulator with phase-aware speeds as a background task."""
-    global _mission_in_progress
-    from autopilot_adapter.mock_simulator import simulate_mission
-
-    mission = _current_mission["mission"]
-    total = len(mission["approach"]) + len(mission["escort"]) + len(mission["return"])
-
-    async def run_mock():
-        global _mission_in_progress
-        _mission_in_progress = True
-        start_autonomous_agent_loop()
-        try:
-            async def on_event(event):
-                event["source"] = "mock"
-                if event.get("type") == "position":
-                    _latest_telemetry.update(event)
-                elif event.get("type") == "user_position":
-                    _latest_user_position.update({"lat": event["lat"], "lng": event["lng"]})
-                await manager.broadcast(event)
-
-            await simulate_mission(mission, on_event)
-        finally:
-            _mission_in_progress = False
-            stop_autonomous_agent_loop()
-            stop_demo_replay()
-            mid = _current_mission.get("mission_id", "") if _current_mission else ""
-            if mid in _missions_history:
-                _missions_history[mid].update(status="completed", ended_at=time.time())
-
-    if manager.sim_task and not manager.sim_task.done():
-        manager.sim_task.cancel()
-    manager.sim_task = asyncio.create_task(run_mock())
-    await manager.broadcast({"type": "mission_started", "source": "mock"})
-    mid = _current_mission.get("mission_id", "")
-    if mid in _missions_history:
-        _missions_history[mid].update(status="active", started_at=time.time())
-
-    mission_city = _current_mission.get("city") or DEFAULT_CITY
-    if mission_city == "kilcoole" and _DEMO_EVENTS_PATH.exists():
-        start_demo_replay()
-        await manager.broadcast({"type": "demo_mode", "active": True, "video": _DEMO_VIDEO_PATH.exists()})
-
-    _log_event("mission_start", mission_id=mid, waypoints=total, mode="mock")
-    return {"status": "started", "source": "mock", "waypoints": total, "mission_id": mid}
 
 
 async def _force_cancel_mission():
@@ -1251,7 +1150,6 @@ async def _force_cancel_mission():
         manager.connector_proc.kill()
     _mission_in_progress = False
     stop_autonomous_agent_loop()
-    stop_demo_replay()
     mid = _current_mission.get("mission_id", "") if _current_mission else ""
     if mid in _missions_history:
         _missions_history[mid].update(status="cancelled", ended_at=time.time())
@@ -1367,9 +1265,16 @@ async def _wait_for_sitl_ready(timeout: float = 90) -> bool:
 @app.post("/api/helpstral")
 async def helpstral(req: HelpstralRequest):
     """
-    Run Helpstral structured safety assessment on a base64 image.
-    Returns full structured assessment: threat_level, status, observations, pattern, reasoning, action.
+    Run Helpstral structured safety assessment. Requires real camera frame (>= 500 bytes).
     """
+    try:
+        decoded = base64.b64decode(req.image, validate=True)
+        if len(decoded) < _MIN_IMAGE_BYTES:
+            raise HTTPException(status_code=400, detail="Image too small. Use live camera — camera_stream.py")
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(status_code=400, detail="Invalid base64 image")
     result = await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: run_helpstral_agent(
@@ -1393,10 +1298,16 @@ async def helpstral(req: HelpstralRequest):
 @app.post("/api/flystral")
 async def flystral(req: FlystralRequest):
     """
-    Run Flystral structured flight command on a base64 drone camera image.
-    Uses latest Helpstral assessment for threat-aware flight decisions.
-    Returns full structured command: command, param, reasoning, altitude_adjust, etc.
+    Run Flystral flight command. Requires real camera frame (>= 500 bytes).
     """
+    try:
+        decoded = base64.b64decode(req.image, validate=True)
+        if len(decoded) < _MIN_IMAGE_BYTES:
+            raise HTTPException(status_code=400, detail="Image too small. Use live camera — camera_stream.py")
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(status_code=400, detail="Invalid base64 image")
     result = await asyncio.get_event_loop().run_in_executor(
         None,
         lambda: run_flystral_agent(
@@ -1450,8 +1361,19 @@ async def flystral(req: FlystralRequest):
 async def run_agent_loop(req: HelpstralRequest):
     """
     Run the full multi-agent loop: Helpstral → Flystral → execute + broadcast.
-    Returns both agent results. Used by partner app for coordinated AI cycle.
+    Requires a real camera frame; rejects placeholder or excessively small images.
     """
+    try:
+        decoded = base64.b64decode(req.image, validate=True)
+        if len(decoded) < _MIN_IMAGE_BYTES:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Image too small ({len(decoded)} bytes). Use a live camera feed — see camera_stream.py",
+            )
+    except Exception as e:
+        if isinstance(e, HTTPException):
+            raise
+        raise HTTPException(status_code=400, detail="Invalid base64 image")
     return await agent_loop(req.image)
 
 
@@ -1603,130 +1525,6 @@ async def route_safety(req: RouteSafetyRequest):
         return {"score": 5, "level": "moderate", "summary": "Safety data unavailable", "lighting": "unknown"}
 
 
-# ── Demo video replay (Kilcoole only, gitignored) ─────────────────────────────
-
-_demo_events: list[dict] = []
-_demo_task: asyncio.Task | None = None
-_DEMO_EVENTS_PATH = Path("demo_video/demo_events.json")
-_DEMO_VIDEO_PATH = Path("demo_video/flight.mp4")
-
-
-def _load_demo_events():
-    global _demo_events
-    if _DEMO_EVENTS_PATH.exists():
-        try:
-            data = json.loads(_DEMO_EVENTS_PATH.read_text())
-            _demo_events = sorted(data.get("events", []), key=lambda e: e.get("time_s", 0))
-        except Exception:
-            _demo_events = []
-
-
-async def _demo_replay_loop():
-    """Replay timed demo events during a Kilcoole mission."""
-    _load_demo_events()
-    if not _demo_events:
-        return
-    _log_event("demo_replay", status="started", events=len(_demo_events))
-    start_time = time.time()
-    try:
-        for event in _demo_events:
-            target = event.get("time_s", 0)
-            elapsed = time.time() - start_time
-            if target > elapsed:
-                await asyncio.sleep(target - elapsed)
-            if not _mission_in_progress:
-                break
-
-            etype = event.get("type", "")
-            data = event.get("data", {})
-
-            if etype == "flystral_manoeuvre":
-                await manager.broadcast({
-                    "type": "agent_update",
-                    "helpstral": _latest_helpstral or {},
-                    "flystral": {
-                        "command": data.get("command", "FOLLOW"),
-                        "param": data.get("param", "0.5"),
-                        "reasoning": data.get("reasoning", ""),
-                        "mode": "velocity" if data.get("vx") else "discrete",
-                        "tool_calls_made": [{"tool": "get_drone_telemetry"}, {"tool": "get_threat_assessment"}],
-                    },
-                    "flystral_mode": "velocity" if data.get("vx") else "discrete",
-                    "tools_used": {"helpstral": [], "flystral": ["get_drone_telemetry", "get_threat_assessment"]},
-                })
-                if data.get("vx") is not None:
-                    await _send_to_connector({
-                        "type": "flystral_offset",
-                        "dlat": 0, "dlng": 0, "dalt": 0,
-                        "velocity": {
-                            "vx": data.get("vx", 0),
-                            "vy": data.get("vy", 0),
-                            "vz": data.get("vz", 0),
-                            "yaw_rate": data.get("yaw_rate", 0),
-                        },
-                    })
-
-            elif etype == "helpstral_alert":
-                await manager.broadcast({
-                    "type": "agent_update",
-                    "helpstral": data,
-                    "flystral": _latest_flystral or {},
-                    "flystral_mode": "discrete",
-                    "tools_used": {"helpstral": ["get_location_context", "get_recent_assessments"], "flystral": []},
-                })
-
-            elif etype == "operator_review":
-                review = {
-                    "id": str(uuid.uuid4())[:8],
-                    **data,
-                    "timestamp": time.time(),
-                    "user_position": _latest_user_position,
-                }
-                global _pending_operator_review
-                _pending_operator_review = review
-                await _send_to_connector({"type": "hold_position"})
-                await manager.broadcast({"type": "operator_review", **review})
-
-            elif etype == "phase":
-                await manager.broadcast({"type": "phase", **data})
-
-            _log_event("demo_event", event_type=etype, time_s=event.get("time_s", 0))
-
-    except asyncio.CancelledError:
-        pass
-    finally:
-        _log_event("demo_replay", status="stopped")
-
-
-def start_demo_replay():
-    global _demo_task
-    if _demo_task and not _demo_task.done():
-        return
-    _demo_task = asyncio.create_task(_demo_replay_loop())
-
-
-def stop_demo_replay():
-    global _demo_task
-    if _demo_task and not _demo_task.done():
-        _demo_task.cancel()
-    _demo_task = None
-
-
-@app.get("/api/demo/video")
-async def get_demo_video():
-    """Check if demo video exists and return its path info."""
-    if _DEMO_VIDEO_PATH.exists():
-        return {"available": True, "path": str(_DEMO_VIDEO_PATH)}
-    return {"available": False}
-
-
-@app.get("/api/demo/events")
-async def get_demo_events():
-    """Return demo event timeline."""
-    _load_demo_events()
-    return {"events": _demo_events, "video_available": _DEMO_VIDEO_PATH.exists()}
-
-
 # ── Health check ───────────────────────────────────────────────────────────────
 @app.get("/health")
 async def health():
@@ -1744,8 +1542,8 @@ async def health():
         "status": "ok",
         "mistral_key": bool(MISTRAL_API_KEY),
         "ors_key": bool(ORS_API_KEY),
-        "helpstral_model": "BenBarr/helpstral" if HELPSTRAL_ENDPOINT else "pixtral-12b-2409",
-        "flystral_model": "BenBarr/flystral" if FLYSTRAL_ENDPOINT else "ministral-3b-latest",
+        "helpstral_model": "BenBarr/helpstral" if HELPSTRAL_ENDPOINT else "not configured",
+        "flystral_model": "BenBarr/flystral" if FLYSTRAL_ENDPOINT else "not configured",
         "output_writable": output_writable,
     }
 

@@ -554,13 +554,6 @@
             <div class="tl-speed" id="tlSpeedReturn"></div>
           </div>
         </div>
-        <div id="demoVideoContainer" style="display:none;margin:10px 0;border-radius:12px;overflow:hidden;background:#000">
-          <video id="demoVideo" style="width:100%;border-radius:12px" muted playsinline></video>
-          <div style="padding:6px 10px;background:rgba(0,0,0,0.7);color:#fff;font-size:0.7rem;display:flex;align-items:center;gap:6px">
-            <span class="pulse-dot" style="position:static;width:6px;height:6px"></span>
-            <span>Live drone camera feed</span>
-          </div>
-        </div>
         <button class="btn btn-danger" id="btnDistress">I need help</button>
         <button class="btn btn-primary" id="btnArrived">I've arrived safely</button>
         <button class="btn btn-outline" id="btnCancel">Cancel escort</button>
@@ -1016,7 +1009,7 @@
 
         if (droneRemoveTimer) { clearTimeout(droneRemoveTimer); droneRemoveTimer = null; }
         if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; }
-        removeDemoUser();
+        removeUserPosition();
         missionActive = false;
 
         if (hubPosition) {
@@ -1055,7 +1048,7 @@
         missionActive = true;
         showState('stateActive');
         resetTimeline();
-        document.getElementById('droneText').textContent = startData.source === 'mock' ? 'Drone launched (sim)' : 'ArduPilot armed — drone launching';
+        document.getElementById('droneText').textContent = 'ArduPilot armed — drone launching';
         document.getElementById('droneSub').textContent = '';
         document.getElementById('liveBadge').style.display = 'none';
         document.getElementById('statusText').textContent = 'Mission active';
@@ -1079,7 +1072,7 @@
         missionActive = true;
         showState('stateActive');
         resetTimeline();
-        document.getElementById('droneText').textContent = data.source === 'mock' ? 'Drone launched (sim)' : 'ArduPilot armed — drone launching';
+        document.getElementById('droneText').textContent = 'ArduPilot armed — drone launching';
         document.getElementById('droneSub').textContent = '';
         document.getElementById('liveBadge').style.display = 'none';
         document.getElementById('statusText').textContent = 'Mission active';
@@ -1146,10 +1139,10 @@
           updateDrone(msg);
           if (document.getElementById('stateActive').style.display !== 'none') {
             document.getElementById('liveBadge').style.display = 'inline-block';
-            document.getElementById('liveBadge').textContent = msg.source === 'mock' ? 'Sim' : 'Live';
+            document.getElementById('liveBadge').textContent = 'Live';
           }
-        } else if (msg.type === 'user_position' && msg.source === 'demo') {
-          updateDemoUser(msg);
+        } else if (msg.type === 'user_position') {
+          updateUserPosition(msg);
         } else if (msg.type === 'agent_update') {
           const hs = msg.helpstral || {};
           const tl = hs.threat_level || 1;
@@ -1181,12 +1174,6 @@
             document.getElementById('droneSub').textContent = '';
             startLiveTracking();
           }
-        } else if (msg.type === 'demo_mode' && msg.active && msg.video) {
-          var vc = document.getElementById('demoVideoContainer');
-          var vid = document.getElementById('demoVideo');
-          vid.src = '/demo_video/flight.mp4';
-          vid.play().catch(function(){});
-          vc.style.display = '';
         } else if (msg.type === 'sitl_status') {
           if (document.getElementById('statePlanned').style.display !== 'none' ||
               document.getElementById('stateActive').style.display !== 'none') {
@@ -1204,7 +1191,7 @@
           missionActive = false;
           stopLiveTracking();
           updateTimeline('return', null);
-          removeDemoUser();
+          removeUserPosition();
           document.getElementById('droneText').textContent = 'Mission complete';
           document.getElementById('droneSub').textContent = 'Drone at hub — ready for next mission';
           document.getElementById('liveBadge').style.display = 'none';
@@ -1268,24 +1255,24 @@
       }[p] || (p ? String(p).replace(/_/g, ' ') : '');
     }
 
-    let demoUserMarker = null;
-    const demoUserIcon = L.divIcon({
+    let userPositionMarker = null;
+    const userPositionIcon = L.divIcon({
       className: '',
       html: '<div style="width:12px;height:12px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3)"></div>',
       iconSize: [12, 12], iconAnchor: [6, 6],
     });
 
-    function updateDemoUser(msg) {
+    function updateUserPosition(msg) {
       if (msg.lat == null || msg.lng == null) return;
-      if (!demoUserMarker) {
-        demoUserMarker = L.marker([msg.lat, msg.lng], { icon: demoUserIcon, zIndexOffset: 900 }).addTo(map);
+      if (!userPositionMarker) {
+        userPositionMarker = L.marker([msg.lat, msg.lng], { icon: userPositionIcon, zIndexOffset: 900 }).addTo(map);
       } else {
-        demoUserMarker.setLatLng([msg.lat, msg.lng]);
+        userPositionMarker.setLatLng([msg.lat, msg.lng]);
       }
     }
 
-    function removeDemoUser() {
-      if (demoUserMarker) { map.removeLayer(demoUserMarker); demoUserMarker = null; }
+    function removeUserPosition() {
+      if (userPositionMarker) { map.removeLayer(userPositionMarker); userPositionMarker = null; }
     }
 
     let activePhase = null;
@@ -1421,7 +1408,7 @@
     document.getElementById('btnCancel').onclick = async () => {
       stopLiveTracking();
       missionActive = false;
-      removeDemoUser();
+      removeUserPosition();
       try { await fetch('/api/mission/cancel', { method: 'POST' }); } catch(_) {}
       [approachLayer, escortLayer, returnLayer, routeLayer, originConnector, destConnector].forEach(l => { if (l) map.removeLayer(l); });
       originConnector = null; destConnector = null;

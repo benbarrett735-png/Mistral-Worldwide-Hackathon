@@ -1,56 +1,30 @@
 """
-Helpstral inference.
-Call check_distress(image_base64) -> "SAFE" | "DISTRESS"
+Helpstral inference CLI.
+Uses the fine-tuned endpoint (HELPSTRAL_ENDPOINT) via run_helpstral_agent.
 """
 
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import MISTRAL_VISION_MODEL, MISTRAL_API_KEY
-
-USER_PROMPT = (
-    "Analyze this image. Is the person in danger or distress? "
-    "Respond with exactly one word: DISTRESS or SAFE."
-)
+from config import HELPSTRAL_ENDPOINT
+from helpstral.agent import run_helpstral_agent
 
 
 def check_distress(image_base64: str) -> dict:
     """
-    Run Helpstral distress detection on a base64 JPEG image.
-    Returns {"status": "SAFE" | "DISTRESS", "raw": str}.
-    Falls back to "SAFE" if model / key unavailable.
+    Run Helpstral via fine-tuned endpoint.
+    Returns {"status": "SAFE" | "DISTRESS" | ..., "raw": str}.
+    Requires HELPSTRAL_ENDPOINT.
     """
-    if not MISTRAL_API_KEY:
-        return {"status": "SAFE", "raw": "NO_KEY"}
-
-    try:
-        from mistralai import Mistral
-        client = Mistral(api_key=MISTRAL_API_KEY)
-
-        response = client.chat.complete(
-            model=MISTRAL_VISION_MODEL,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": USER_PROMPT},
-                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_base64}"}},
-                    ],
-                }
-            ],
-            max_tokens=10,
-        )
-        raw = response.choices[0].message.content.strip().upper()
-        status = "DISTRESS" if "DISTRESS" in raw else "SAFE"
-        return {"status": status, "raw": raw}
-    except Exception as e:
-        return {"status": "SAFE", "raw": f"ERROR:{e}"}
+    if not HELPSTRAL_ENDPOINT:
+        return {"status": "SAFE", "raw": "HELPSTRAL_ENDPOINT not set"}
+    result = run_helpstral_agent(image_base64)
+    return {"status": result.get("status", "SAFE"), "raw": str(result)}
 
 
 if __name__ == "__main__":
     import base64
-    import sys
 
     if len(sys.argv) < 2:
         print("Usage: python infer.py <image.jpg>")

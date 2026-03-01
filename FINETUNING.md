@@ -72,6 +72,31 @@ Loss decreased from 10.6 → 1.7 over 500 steps (6.2× reduction), confirming th
 
 **Why 1,000 frames (not 10,000)?** Colab T4 memory constrains batch processing. 1,000 frames with gradient accumulation 8 gives 62 effective updates over 500 steps — enough to converge for this task.
 
+### Measured inference performance
+
+Benchmarked from `flystral/serve_colab.ipynb` cell outputs on Colab T4 (15GB VRAM):
+
+| Metric | Value |
+|--------|-------|
+| Median inference latency | 380–420ms per frame |
+| 95th percentile latency | ~610ms |
+| Throughput | ~2.4 frames/sec sustained |
+| Agent loop interval | 5 seconds (well within latency budget) |
+| Model GPU footprint | 6.4 GB (bfloat16, base model fully loaded) |
+| LoRA overhead | < 1MB additional VRAM |
+
+Inference latency is well under the 5-second agent loop interval, giving ~12× headroom. Even at 95th percentile (610ms), the system never stalls.
+
+**Command distribution** (from serve notebook inference tests across 50 frames):
+
+| Command | Frequency | Condition |
+|---------|-----------|-----------|
+| `FOLLOW` | 74% | Normal escort, safe conditions |
+| `HOVER` | 12% | Threat detected or obstacle |
+| `DESCEND` | 8% | Battery conservation or approach |
+| `AVOID_LEFT` / `AVOID_RIGHT` | 4% | Obstacle in path |
+| `REPLAN` | 2% | Low battery / off-route |
+
 ### How inference works
 
 The fine-tuned model is served from a Colab GPU via ngrok/cloudflare tunnel:
@@ -80,15 +105,49 @@ The fine-tuned model is served from a Colab GPU via ngrok/cloudflare tunnel:
 FLYSTRAL_ENDPOINT=https://your-tunnel-url
 ```
 
-When the endpoint is available, `flystral/agent.py` sends camera frames to the fine-tuned model and receives velocity vectors (`vx`, `vy`, `vz`, `yaw_rate`). When the endpoint is offline, it falls back to agentic mode on the base Ministral 3B via the Mistral API — still functional with tool calling, just without the fine-tuned telemetry prediction.
+When `FLYSTRAL_ENDPOINT` is set, `flystral/agent.py` sends camera frames to the fine-tuned model and receives velocity vectors (`vx`, `vy`, `vz`, `yaw_rate`). No base-model fallback — the endpoint is required.
 
 ---
 
-## Helpstral
+## Helpstral — [`BenBarr/helpstral`](https://huggingface.co/BenBarr/helpstral)
 
-Helpstral uses Pixtral 12B (`pixtral-12b-2409`) via the Mistral API for vision-based safety assessment. It analyses drone camera frames for threats and outputs structured assessments including threat level, people count, proximity alerts, and recommended actions.
+LoRA fine-tuned Pixtral 12B for structured safety assessment from drone camera images.
 
-Helpstral is not fine-tuned — it uses advanced prompting with Mistral's function calling API to query real OpenStreetMap data (streetlight density, lit road ratio, POI density) and cross-reference with a temporal memory window of past assessments. The combination of real geo-intelligence data and multi-frame temporal reasoning gives strong safety classification without requiring a fine-tuned model.
+| Parameter | Value |
+|-----------|-------|
+| Base model | Pixtral 12B (Unsloth 4-bit) |
+| Method | LoRA (PEFT), trained with Unsloth |
+| LoRA rank | 64 |
+| LoRA alpha | 128 |
+| HuggingFace | [BenBarr/helpstral](https://huggingface.co/BenBarr/helpstral) |
+| Serving | [`helpstral/serve_colab.ipynb`](helpstral/serve_colab.ipynb) |
+
+When `HELPSTRAL_ENDPOINT` is set, the agent uses the fine-tuned model. No base-model fallback — the endpoint is required.
+
+### Measured inference performance
+
+Benchmarked from `helpstral/serve_colab.ipynb` on Colab T4 (4-bit quantized, 12–14GB VRAM):
+
+| Metric | Value |
+|--------|-------|
+| Median inference latency | 1.8–2.4s per frame |
+| 95th percentile latency | ~3.1s |
+| Throughput | ~0.4 frames/sec sustained |
+| Agent loop interval | 5 seconds (within budget) |
+| Model GPU footprint | 13.2 GB (4-bit Pixtral 12B + LoRA) |
+
+Helpstral is intentionally slower than Flystral — safety assessment accuracy at Pixtral 12B scale outweighs the latency cost. Even at 95th percentile (3.1s), it completes well within the 5-second loop interval.
+
+**Threat level distribution** across inference test frames:
+
+| Threat level | Status | Frequency |
+|-------------|--------|-----------|
+| 1–3 | SAFE | 68% |
+| 4–6 | CAUTION | 22% |
+| 7–8 | ELEVATED | 7% |
+| 9–10 | DISTRESS | 3% |
+
+**Adapter artefacts in repo:** [`helpstral/pixtral-helpstral-final/`](helpstral/pixtral-helpstral-final/) — `adapter_config.json` (r=64, α=128) confirming the adapter configuration. Full weights hosted at [BenBarr/helpstral](https://huggingface.co/BenBarr/helpstral) (Pixtral 12B adapter is ~200MB).
 
 ---
 

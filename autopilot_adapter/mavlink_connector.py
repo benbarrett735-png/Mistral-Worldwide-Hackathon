@@ -39,6 +39,7 @@ except ImportError:
 try:
     from config import (
         APPROACH_RETURN_SPEED,
+        ARMING_CHECK as _arming_check,
         ESCORT_SPEED,
         FOLLOW_DISTANCE_M,
         HUB_TO_USER_ALT,
@@ -48,8 +49,9 @@ try:
         TRACK_ALT,
     )
 except ImportError:
-    APPROACH_RETURN_SPEED = 50
-    ESCORT_SPEED = 12
+    _arming_check = 0
+    APPROACH_RETURN_SPEED = 15
+    ESCORT_SPEED = 5
     FOLLOW_DISTANCE_M = 15
     HUB_TO_USER_ALT = 60
     TAKEOFF_ALT = 10
@@ -246,7 +248,7 @@ def get_rich_telemetry(mav) -> dict | None:
 def arm_and_takeoff(mav, altitude: float):
     mav.mav.param_set_send(
         mav.target_system, mav.target_component,
-        b'ARMING_CHECK', 0, mavutil.mavlink.MAV_PARAM_TYPE_INT32,
+        b'ARMING_CHECK', _arming_check, mavutil.mavlink.MAV_PARAM_TYPE_INT32,
     )
     time.sleep(0.3)
 

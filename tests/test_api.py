@@ -6,9 +6,8 @@ Uses async_client fixture from conftest (httpx.AsyncClient with ASGITransport).
 import base64
 import pytest
 
-SAMPLE_IMAGE_B64 = base64.b64encode(
-    bytes([0xFF, 0xD8, 0xFF, 0xE0] + [0x00] * 100 + [0xFF, 0xD9])
-).decode()
+# Inline image bytes (>=500 decoded) to satisfy server validation; no sample images.
+_MIN_IMAGE_B64 = base64.b64encode(b"x" * 600).decode()
 
 
 @pytest.mark.asyncio
@@ -80,7 +79,7 @@ async def test_post_helpstral_returns_200_and_status(async_client):
     """POST /api/helpstral with base64 image returns 200 and status key."""
     response = await async_client.post(
         "/api/helpstral",
-        json={"image": SAMPLE_IMAGE_B64},
+        json={"image": _MIN_IMAGE_B64},
     )
     assert response.status_code == 200
     data = response.json()
@@ -92,7 +91,7 @@ async def test_post_flystral_returns_200_and_command(async_client):
     """POST /api/flystral with base64 image returns 200 and command key."""
     response = await async_client.post(
         "/api/flystral",
-        json={"image": SAMPLE_IMAGE_B64},
+        json={"image": _MIN_IMAGE_B64},
     )
     assert response.status_code == 200
     data = response.json()

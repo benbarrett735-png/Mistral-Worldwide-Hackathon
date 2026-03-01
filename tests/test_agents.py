@@ -1,5 +1,6 @@
 """Tests for the multi-agent system: Helpstral, Flystral, Louise agents + agent loop."""
 
+import base64
 import json
 import pytest
 import sys
@@ -59,12 +60,13 @@ class TestHelpstralAgent:
         result = parse_structured_assessment('{"threat_level": 1, "action": "FIRE_MISSILES"}')
         assert result["action"] == "CONTINUE_MONITORING"
 
-    def test_run_no_key(self):
+    def test_run_endpoint_required(self):
         from helpstral.agent import run_helpstral_agent
-        with patch("helpstral.agent.MISTRAL_API_KEY", ""):
-            result = run_helpstral_agent("fakeimage")
+        img_b64 = base64.b64encode(b"x" * 600).decode()
+        with patch("helpstral.agent.HELPSTRAL_ENDPOINT", ""):
+            result = run_helpstral_agent(img_b64)
             assert result["status"] == "SAFE"
-            assert result["source"] == "no_key_fallback"
+            assert result["source"] == "endpoint_required"
             assert "tool_calls_made" in result
 
     def test_tool_location_context(self):
@@ -139,32 +141,14 @@ class TestFlystralAgent:
         assert result["command"] == "FOLLOW"
         assert result.get("parse_error") is True
 
-    def test_run_no_key_safe(self):
+    def test_run_endpoint_required(self):
         from flystral.agent import run_flystral_agent
-        with patch("flystral.agent.MISTRAL_API_KEY", ""):
-            result = run_flystral_agent("fakeimage")
+        img_b64 = base64.b64encode(b"x" * 600).decode()
+        with patch("flystral.agent.FLYSTRAL_ENDPOINT", ""):
+            result = run_flystral_agent(img_b64)
             assert result["command"] == "FOLLOW"
+            assert result["source"] == "endpoint_required"
             assert "tool_calls_made" in result
-
-    def test_run_no_key_distress_adapts(self):
-        from flystral.agent import run_flystral_agent
-        with patch("flystral.agent.MISTRAL_API_KEY", ""):
-            result = run_flystral_agent(
-                "fakeimage",
-                threat_assessment={"threat_level": 9, "status": "DISTRESS"},
-            )
-            assert result["command"] == "HOVER"
-            assert result["altitude_adjust"] == -15
-
-    def test_run_no_key_caution_adapts(self):
-        from flystral.agent import run_flystral_agent
-        with patch("flystral.agent.MISTRAL_API_KEY", ""):
-            result = run_flystral_agent(
-                "fakeimage",
-                threat_assessment={"threat_level": 6, "status": "CAUTION"},
-            )
-            assert result["param"] == "0.3"
-            assert result["altitude_adjust"] == -5
 
     def test_tool_telemetry(self):
         from flystral.agent import tool_get_drone_telemetry, set_shared_state
@@ -246,30 +230,27 @@ class TestLouiseAgent:
 
 class TestAgentLoop:
     @pytest.mark.asyncio
-    async def test_agent_loop_no_key(self):
-        with patch("helpstral.agent.MISTRAL_API_KEY", ""), \
-             patch("flystral.agent.MISTRAL_API_KEY", ""):
+    async def test_agent_loop_endpoints_required(self):
+        """When endpoints not set, agents return endpoint_required (no base fallback)."""
+        import base64
+        img_b64 = base64.b64encode(b"x" * 600).decode()
+        with patch("helpstral.agent.HELPSTRAL_ENDPOINT", ""), patch("flystral.agent.FLYSTRAL_ENDPOINT", ""):
             import server
             server._assessment_history.clear()
-            server._latest_telemetry = {}
-            server._latest_user_position = {}
-            server._latest_helpstral = dict(server.HELPSTRAL_DEFAULT)
-            server._latest_flystral = dict(server.FLYSTRAL_DEFAULT)
-
-            result = await server.agent_loop("fakebase64image")
+            result = await server.agent_loop(img_b64)
             assert "helpstral" in result
             assert "flystral" in result
-            assert result["helpstral"]["status"] == "SAFE"
-            assert result["flystral"]["command"] == "FOLLOW"
-            assert "tool_calls_made" in result["helpstral"]
+            assert result["helpstral"].get("source") in ("endpoint_required", "endpoint_error")
+            assert result["flystral"].get("source") in ("endpoint_required", "endpoint_error")
 
     @pytest.mark.asyncio
     async def test_agent_loop_updates_history(self):
-        with patch("helpstral.agent.MISTRAL_API_KEY", ""), \
-             patch("flystral.agent.MISTRAL_API_KEY", ""):
+        import base64
+        img_b64 = base64.b64encode(b"x" * 600).decode()
+        with patch("helpstral.agent.HELPSTRAL_ENDPOINT", ""), patch("flystral.agent.FLYSTRAL_ENDPOINT", ""):
             import server
             server._assessment_history.clear()
-            await server.agent_loop("fakebase64image")
+            await server.agent_loop(img_b64)
             assert len(server._assessment_history) == 1
 
     @pytest.mark.asyncio
@@ -289,8 +270,9 @@ class TestAgentEndpoints:
     async def test_helpstral_endpoint(self):
         from httpx import AsyncClient, ASGITransport
         from server import app
+        img_b64 = base64.b64encode(b"x" * 600).decode()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            resp = await ac.post("/api/helpstral", json={"image": "fakebase64"})
+            resp = await ac.post("/api/helpstral", json={"image": img_b64})
             assert resp.status_code == 200
             data = resp.json()
             assert "status" in data
@@ -300,8 +282,9 @@ class TestAgentEndpoints:
     async def test_flystral_endpoint(self):
         from httpx import AsyncClient, ASGITransport
         from server import app
+        img_b64 = base64.b64encode(b"x" * 600).decode()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            resp = await ac.post("/api/flystral", json={"image": "fakebase64"})
+            resp = await ac.post("/api/flystral", json={"image": img_b64})
             assert resp.status_code == 200
             data = resp.json()
             assert "command" in data
@@ -310,8 +293,9 @@ class TestAgentEndpoints:
     async def test_agent_loop_endpoint(self):
         from httpx import AsyncClient, ASGITransport
         from server import app
+        img_b64 = base64.b64encode(b"x" * 600).decode()
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            resp = await ac.post("/api/agent-loop", json={"image": "fakebase64"})
+            resp = await ac.post("/api/agent-loop", json={"image": img_b64})
             assert resp.status_code == 200
             data = resp.json()
             assert "helpstral" in data

@@ -552,7 +552,7 @@
     document.getElementById('apHint').textContent=cfg.mav_connection||'tcp:127.0.0.1:5760';
   }).catch(()=>{document.getElementById('apHint').textContent='tcp:127.0.0.1:5760'});
 
-  function handleEvent(msg){switch(msg.type){case'mission_update':handleMissionUpdate(msg);break;case'mission_started':handleMissionStarted(msg);break;case'sitl_status':handleSitlStatus(msg);break;case'position':if(msg.source==='hub_reset')break;updateDrone(msg);updateTelemetry(msg);if(msg.phase&&msg.phase!==currentPhase)handlePhaseChange(msg.phase);break;case'phase':handlePhaseChange(msg.phase);break;case'connector_died':handleConnectorDied();break;case'complete':handleComplete();break;case'user_arrived':handleUserArrived(msg);break;case'emergency':handleEmergency(msg);break;case'operator_review':handleOperatorReview(msg);break;case'operator_review_resolved':hideOperatorReview();break;case'sitl_log':addLog(msg.message);appendArduPilotConsole(msg.message);break;case'flystral':handleFlystral(msg);break;case'agent_update':handleAgentUpdate(msg);break;case'user_position':if(msg.source==='demo')updateDemoUser(msg);break;case'demo_mode':handleDemoMode(msg);break;case'pong':break}}
+  function handleEvent(msg){switch(msg.type){case'mission_update':handleMissionUpdate(msg);break;case'mission_started':handleMissionStarted(msg);break;case'sitl_status':handleSitlStatus(msg);break;case'position':if(msg.source==='hub_reset')break;updateDrone(msg);updateTelemetry(msg);if(msg.phase&&msg.phase!==currentPhase)handlePhaseChange(msg.phase);break;case'phase':handlePhaseChange(msg.phase);break;case'connector_died':handleConnectorDied();break;case'complete':handleComplete();break;case'user_arrived':handleUserArrived(msg);break;case'emergency':handleEmergency(msg);break;case'operator_review':handleOperatorReview(msg);break;case'operator_review_resolved':hideOperatorReview();break;case'sitl_log':addLog(msg.message);appendArduPilotConsole(msg.message);break;case'flystral':handleFlystral(msg);break;case'agent_update':handleAgentUpdate(msg);break;case'user_position':updateUserPosition(msg);break;case'pong':break}}
 
   function handleMissionUpdate(msg){
     hasMission=true;addLog('Mission received');
@@ -578,7 +578,7 @@
     resetPhases();drawRoutes(msg.routes);showWaypointFiles(s);
     if(msg.user)placeMarker('user',[msg.user.lat,msg.user.lng],'#111','User');
     if(msg.destination)placeMarker('dest',[msg.destination.lat,msg.destination.lng],'#555','Dest');
-    if(msg.hub){hubPosition=msg.hub;HUB=[msg.hub.lat,msg.hub.lng];if(hubMarkerMC)map.removeLayer(hubMarkerMC);if(hubCircleMC)map.removeLayer(hubCircleMC);hubMarkerMC=L.marker(HUB,{icon:hubIcon}).addTo(map).bindPopup(`<strong>${msg.hub.label||'Louise Drone Centre'}</strong>`);hubCircleMC=L.circle(HUB,{radius:3000,color:'#111',fillColor:'#111',fillOpacity:0.02,weight:1,dashArray:'6,4'}).addTo(map);if(droneMarker)map.removeLayer(droneMarker);if(demoUserMarker){map.removeLayer(demoUserMarker);demoUserMarker=null}droneMarker=L.marker(HUB,{icon:droneIcon,zIndexOffset:1000}).addTo(map)}
+    if(msg.hub){hubPosition=msg.hub;HUB=[msg.hub.lat,msg.hub.lng];if(hubMarkerMC)map.removeLayer(hubMarkerMC);if(hubCircleMC)map.removeLayer(hubCircleMC);hubMarkerMC=L.marker(HUB,{icon:hubIcon}).addTo(map).bindPopup(`<strong>${msg.hub.label||'Louise Drone Centre'}</strong>`);hubCircleMC=L.circle(HUB,{radius:3000,color:'#111',fillColor:'#111',fillOpacity:0.02,weight:1,dashArray:'6,4'}).addTo(map);if(droneMarker)map.removeLayer(droneMarker);if(userPositionMarker){map.removeLayer(userPositionMarker);userPositionMarker=null}droneMarker=L.marker(HUB,{icon:droneIcon,zIndexOffset:1000}).addTo(map)}
     const all=[...(msg.routes.approach||[]),...(msg.routes.escort||[]),...(msg.routes['return']||[])];
     if(all.length)map.fitBounds(all,{padding:[60,60]});
   }
@@ -593,7 +593,7 @@
     const dlc=document.getElementById('droneLiveCard');dlc.classList.add('show');
     document.getElementById('dlcText').textContent='Drone launched';
     document.getElementById('dlcSub').textContent='Mission in progress';
-    document.getElementById('dlcBadge').textContent=msg.source==='mock'?'SIM':'LIVE';
+    document.getElementById('dlcBadge').textContent='LIVE';
     appendArduPilotConsole('Mission started');startCameraRefresh();
   }
 
@@ -605,16 +605,16 @@
 
   function updateDrone(msg){if(msg.lat==null||msg.lng==null)return;if(!droneMarker)droneMarker=L.marker([msg.lat,msg.lng],{icon:droneIcon,zIndexOffset:1000}).addTo(map);else droneMarker.setLatLng([msg.lat,msg.lng])}
 
-  let demoUserMarker=null;
-  const demoUserIcon=L.divIcon({className:'',html:'<div style="width:10px;height:10px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3)"></div>',iconSize:[10,10],iconAnchor:[5,5]});
-  function updateDemoUser(msg){if(msg.lat==null||msg.lng==null)return;if(!demoUserMarker)demoUserMarker=L.marker([msg.lat,msg.lng],{icon:demoUserIcon,zIndexOffset:900}).addTo(map);else demoUserMarker.setLatLng([msg.lat,msg.lng])}
+  let userPositionMarker=null;
+  const userPositionIcon=L.divIcon({className:'',html:'<div style="width:10px;height:10px;background:#3b82f6;border:2px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.3)"></div>',iconSize:[10,10],iconAnchor:[5,5]});
+  function updateUserPosition(msg){if(msg.lat==null||msg.lng==null)return;if(!userPositionMarker)userPositionMarker=L.marker([msg.lat,msg.lng],{icon:userPositionIcon,zIndexOffset:900}).addTo(map);else userPositionMarker.setLatLng([msg.lat,msg.lng])}
 
   function updateTelemetry(msg){
     if(msg.lat==null||msg.lng==null)return;
     notifySec('telemetrySec','telemetryDot');
     document.getElementById('flightLogSec').style.display='';
     document.getElementById('summaryBar').style.display='';
-    document.getElementById('telSource').textContent=msg.source==='mock'?'SIM':'LIVE';
+      document.getElementById('telSource').textContent='LIVE';
     appendFlightLog(msg);
     const s=(id,v)=>{const e=document.getElementById(id);if(e)e.textContent=v??'—'};
     s('telAlt',(msg.alt!=null&&!isNaN(msg.alt))?Math.round(msg.alt):'—');
@@ -650,7 +650,7 @@
       if(msg.ground_speed!=null)parts.push(msg.ground_speed.toFixed(1)+' m/s');
       if(pp!=null)parts.push(pp+'%');
       document.getElementById('dlcSub').textContent=parts.join(' · ')||'';
-      document.getElementById('dlcBadge').textContent=msg.source==='mock'?'SIM':'LIVE';
+      document.getElementById('dlcBadge').textContent='LIVE';
     }
   }
 
@@ -703,18 +703,8 @@
     document.getElementById('summaryBar').style.display='none';
     document.getElementById('droneLiveCard').classList.remove('show');
     if(hubPosition&&droneMarker)droneMarker.setLatLng([hubPosition.lat,hubPosition.lng]);
-    if(demoUserMarker){map.removeLayer(demoUserMarker);demoUserMarker=null}
+    if(userPositionMarker){map.removeLayer(userPositionMarker);userPositionMarker=null}
     setTimeout(()=>{if(droneMarker){map.removeLayer(droneMarker);droneMarker=null}},4000);
-  }
-
-  function handleDemoMode(msg) {
-    if (msg.active && msg.video) {
-      showCamQuadrant();
-      const body = document.getElementById('camQuadBody');
-      body.innerHTML = '<video id="demoCamVideo" style="width:100%;height:100%;object-fit:cover;border-radius:6px" muted playsinline autoplay><source src="/demo_video/flight.mp4" type="video/mp4"></video>';
-      document.getElementById('demoCamVideo').play().catch(function(){});
-      addLog('Demo mode — playing drone camera footage');
-    }
   }
 
   let helpstralInterval=null;

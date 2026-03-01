@@ -102,7 +102,7 @@ The adapter sits in the Louise multi-agent drone escort system:
 - **Helpstral** — safety/threat assessment from camera images (Pixtral 12B)
 - **Louise** — conversational safety companion (Ministral 3B)
 
-When the fine-tuned endpoint is available, Flystral uses this adapter. When offline, it falls back to agentic mode on the base Ministral 3B via the Mistral API with function calling.
+When `FLYSTRAL_ENDPOINT` is set, Flystral uses this adapter exclusively. No base-model fallback — the fine-tuned endpoint is required.
 
 ## Developed by
 

@@ -236,10 +236,10 @@ def run_louise_agent(
     """
     if not MISTRAL_API_KEY:
         return {
-            "response": "I'm Louise, your safety assistant. I'm currently in offline mode, "
-                        "but I can still help. What do you need?",
+            "response": "I'm Louise, your safety assistant. MISTRAL_API_KEY is required for full conversational AI. "
+                        "Set it in .env to enable live chat.",
             "tool_calls_made": [],
-            "source": "no_key_fallback",
+            "source": "api_key_required",
         }
 
     messages = [{"role": "system", "content": _get_system_prompt()}]

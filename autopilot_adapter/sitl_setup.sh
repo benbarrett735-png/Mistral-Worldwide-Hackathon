@@ -3,7 +3,7 @@
 # Run: bash autopilot_adapter/sitl_setup.sh
 #
 # This installs ArduPilot SITL and its dependencies so you can
-# simulate drone flights in Paris without hardware.
+# run ArduCopter SITL in Paris (EASA Open Category A1 test environment).
 
 set -e
 

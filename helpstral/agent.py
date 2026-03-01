@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import MISTRAL_API_KEY, MISTRAL_VISION_MODEL, HELPSTRAL_ENDPOINT
+from config import HELPSTRAL_ENDPOINT
 
 SYSTEM_PROMPT = (
     "You are Helpstral, a safety AI monitoring a drone escort camera feed protecting a person "
@@ -271,97 +271,14 @@ def run_helpstral_agent(
     location: dict | None = None,
     route_progress: float | None = None,
 ) -> dict:
-    """
-    Run Helpstral as a real agent: the model decides which tools to call,
-    receives results, and reasons over them before producing its assessment.
-    Primary: fine-tuned endpoint if HELPSTRAL_ENDPOINT is set.
-    Fallback: Mistral API with tool calling.
-    """
-    if HELPSTRAL_ENDPOINT:
-        result = _run_remote_endpoint(image_b64)
-        if result:
-            return result
+    """Run Helpstral via fine-tuned endpoint only (BenBarr/helpstral)."""
+    if not HELPSTRAL_ENDPOINT:
+        return {**DEFAULT_ASSESSMENT, "source": "endpoint_required", "tool_calls_made": [],
+                "reasoning": "HELPSTRAL_ENDPOINT not set. Run helpstral/serve_colab.ipynb and set in .env."}
 
-    if not MISTRAL_API_KEY:
-        return {**DEFAULT_ASSESSMENT, "source": "no_key_fallback", "tool_calls_made": []}
-
-    if recent_assessments is not None:
-        global _assessment_history_ref
-        _assessment_history_ref = recent_assessments
-
-    user_lat = _user_position_ref.get("lat", 48.86)
-    user_lng = _user_position_ref.get("lng", 2.34)
-
-    progress_note = ""
-    if route_progress is not None:
-        progress_note = f" Escort is {int(route_progress * 100)}% complete."
-
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                {"type": "text", "text": (
-                    f"Analyze this frame. The user is at lat={user_lat}, lng={user_lng}.{progress_note} "
-                    "Use your tools to gather context, then provide your structured threat assessment as JSON."
-                )},
-            ],
-        },
-    ]
-
-    tool_calls_made = []
-
-    try:
-        from mistralai import Mistral
-        client = Mistral(api_key=MISTRAL_API_KEY)
-
-        model = MISTRAL_VISION_MODEL
-
-        for _round in range(MAX_TOOL_ROUNDS + 1):
-            response = client.chat.complete(
-                model=model,
-                messages=messages,
-                tools=TOOLS,
-                tool_choice="auto",
-                max_tokens=600,
-                temperature=0.1,
-            )
-
-            msg = response.choices[0].message
-
-            if not msg.tool_calls:
-                raw = (msg.content or "").strip()
-                result = parse_structured_assessment(raw)
-                result["timestamp"] = time.time()
-                result["tool_calls_made"] = tool_calls_made
-                return result
-
-            messages.append(msg)
-
-            for tc in msg.tool_calls:
-                fn_name = tc.function.name
-                fn_args = json.loads(tc.function.arguments) if tc.function.arguments else {}
-                tool_calls_made.append({"tool": fn_name, "args": fn_args})
-
-                executor = TOOL_DISPATCH.get(fn_name)
-                if executor:
-                    fn_result = executor(fn_args)
-                else:
-                    fn_result = json.dumps({"error": f"Unknown tool: {fn_name}"})
-
-                messages.append({
-                    "role": "tool",
-                    "name": fn_name,
-                    "content": fn_result,
-                    "tool_call_id": tc.id,
-                })
-
-        raw = (msg.content or "").strip() if msg else ""
-        result = parse_structured_assessment(raw)
-        result["timestamp"] = time.time()
-        result["tool_calls_made"] = tool_calls_made
+    result = _run_remote_endpoint(image_b64)
+    if result:
         return result
 
-    except Exception as e:
-        return {**DEFAULT_ASSESSMENT, "error": str(e), "timestamp": time.time(), "tool_calls_made": tool_calls_made}
+    return {**DEFAULT_ASSESSMENT, "source": "endpoint_error", "tool_calls_made": [],
+            "reasoning": "Helpstral endpoint unavailable."}
