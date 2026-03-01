@@ -31,9 +31,9 @@ from config import (
     CURRENCY,
     DEFAULT_CITY,
     DRONE_HUB,
-    FLYSTRAL_MODEL_ID,
+    FLYSTRAL_ENDPOINT,
     GEOFENCE_BOUNDS,
-    HELPSTRAL_MODEL_ID,
+    HELPSTRAL_ENDPOINT,
     MAV_CONNECTION,
     MISTRAL_API_KEY,
     ORS_API_KEY,
@@ -1423,8 +1423,8 @@ async def health():
         "status": "ok",
         "mistral_key": bool(MISTRAL_API_KEY),
         "ors_key": bool(ORS_API_KEY),
-        "helpstral_model": HELPSTRAL_MODEL_ID,
-        "flystral_model": FLYSTRAL_MODEL_ID,
+        "helpstral_model": "BenBarr/helpstral" if HELPSTRAL_ENDPOINT else "pixtral-12b-2409",
+        "flystral_model": "BenBarr/flystral" if FLYSTRAL_ENDPOINT else "ministral-3b-latest",
         "output_writable": output_writable,
     }
 

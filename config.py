@@ -5,20 +5,18 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Mistral API — use general models with advanced prompts; fine-tuned IDs can override via env
+# Mistral API
 MISTRAL_API_KEY = os.getenv("MISTRAL_API_KEY", "")
-MISTRAL_VISION_MODEL = os.getenv("MISTRAL_VISION_MODEL", "pixtral-12b-2409")       # vision (Helpstral — accuracy-critical)
-MISTRAL_EDGE_MODEL = os.getenv("MISTRAL_EDGE_MODEL", "ministral-3b-latest")        # fast vision (Flystral — latency-critical)
+MISTRAL_VISION_MODEL = os.getenv("MISTRAL_VISION_MODEL", "pixtral-12b-2409")       # Helpstral base
+MISTRAL_EDGE_MODEL = os.getenv("MISTRAL_EDGE_MODEL", "ministral-3b-latest")        # Flystral base (fast vision)
 MISTRAL_GENERAL_MODEL = os.getenv("MISTRAL_GENERAL_MODEL", "mistral-large-latest") # text/path decisions
-MISTRAL_FAST_MODEL = os.getenv("MISTRAL_FAST_MODEL", "mistral-small-latest")       # fast conversational (Louise)
-HELPSTRAL_MODEL_ID = os.getenv("HELPSTRAL_MODEL_ID", MISTRAL_VISION_MODEL)         # overridden by fine-tuned ID
-FLYSTRAL_MODEL_ID = os.getenv("FLYSTRAL_MODEL_ID", MISTRAL_EDGE_MODEL)             # overridden by fine-tuned ID
+MISTRAL_FAST_MODEL = os.getenv("MISTRAL_FAST_MODEL", "mistral-small-latest")       # Louise chat
 
-# Flystral fine-tuned model: remote endpoint (Colab GPU) or local LoRA adapter
-FLYSTRAL_ENDPOINT = os.getenv("FLYSTRAL_ENDPOINT", "")  # e.g. https://xxxx.ngrok.io
-FLYSTRAL_ADAPTER_PATH = os.getenv("FLYSTRAL_ADAPTER_PATH", "")
-if FLYSTRAL_ADAPTER_PATH and not os.path.isabs(FLYSTRAL_ADAPTER_PATH):
-    FLYSTRAL_ADAPTER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), FLYSTRAL_ADAPTER_PATH)
+# Fine-tuned model endpoints (served from HuggingFace models via Colab GPU)
+# Flystral: BenBarr/flystral — LoRA fine-tuned Ministral 3B
+# Helpstral: (HuggingFace model, served similarly)
+FLYSTRAL_ENDPOINT = os.getenv("FLYSTRAL_ENDPOINT", "")
+HELPSTRAL_ENDPOINT = os.getenv("HELPSTRAL_ENDPOINT", "")
 
 # Routing — OSRM public (no key needed), ORS as fallback
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1"

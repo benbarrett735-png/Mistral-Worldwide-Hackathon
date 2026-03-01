@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import HELPSTRAL_MODEL_ID, MISTRAL_API_KEY
+from config import MISTRAL_VISION_MODEL, MISTRAL_API_KEY
 
 USER_PROMPT = (
     "Analyze this image. Is the person in danger or distress? "
@@ -29,7 +29,7 @@ def check_distress(image_base64: str) -> dict:
         client = Mistral(api_key=MISTRAL_API_KEY)
 
         response = client.chat.complete(
-            model=HELPSTRAL_MODEL_ID,
+            model=MISTRAL_VISION_MODEL,
             messages=[
                 {
                     "role": "user",

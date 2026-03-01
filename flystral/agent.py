@@ -1,9 +1,11 @@
 """
-Flystral Agent — agentic flight controller with Mistral function calling.
+Flystral Agent — drone flight controller powered by Mistral.
 
-The model decides which tools to call (get_drone_telemetry, get_threat_assessment,
-get_route_progress), receives results, reasons over them, and produces an adaptive
-flight command. Flystral adapts its behavior based on Helpstral's threat assessment.
+Two inference modes:
+  1. Fine-tuned model (BenBarr/flystral on HuggingFace) served via FLYSTRAL_ENDPOINT
+     — LoRA fine-tuned Ministral 3B, outputs telemetry vectors from camera images.
+  2. Base model fallback (ministral-3b-latest via Mistral API)
+     — agentic mode with function calling for telemetry, threat, and route tools.
 """
 
 from __future__ import annotations
@@ -14,14 +16,8 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import FLYSTRAL_MODEL_ID, MISTRAL_API_KEY, MISTRAL_VISION_MODEL, FLYSTRAL_ADAPTER_PATH, FLYSTRAL_ENDPOINT
+from config import MISTRAL_API_KEY, MISTRAL_EDGE_MODEL, FLYSTRAL_ENDPOINT
 from flystral.command_parser import VALID_COMMANDS, parse_velocity_output
-
-FINETUNED_PROMPT = (
-    "Analyze this drone camera image. Output a JSON velocity command: "
-    "{\"vx\": forward_speed, \"vy\": lateral_speed, \"vz\": vertical_speed, \"yaw_rate\": turn_rate}. "
-    "Positive vx = forward, positive vy = right, positive vz = up. Values in m/s, yaw in deg/s."
-)
 
 SYSTEM_PROMPT = (
     "You are Flystral, a drone autopilot AI for a safety escort drone.\n\n"
@@ -95,13 +91,10 @@ DEFAULT_RESULT = {
 DEFAULT_VELOCITY = {"vx": 2.0, "vy": 0.0, "vz": 0.0, "yaw_rate": 0.0}
 
 
-def _is_finetuned_model(model_id: str) -> bool:
-    """Check if the model ID indicates a fine-tuned model (not a base model)."""
-    return model_id.startswith("ft:") if model_id else False
-
+# ── Fine-tuned model (remote endpoint) ──────────────────────────────────────
 
 def _run_remote_endpoint(image_b64: str, heading_rad: float = 0.0) -> dict:
-    """Call the remote Flystral inference server (Colab GPU via ngrok)."""
+    """Call the fine-tuned Flystral model served from Colab GPU via ngrok."""
     import requests
 
     url = FLYSTRAL_ENDPOINT.rstrip("/") + "/predict"
@@ -125,121 +118,13 @@ def _run_remote_endpoint(image_b64: str, heading_rad: float = 0.0) -> dict:
         "yaw_rate": offset["yaw_rate"],
         "offset": offset,
         "raw": data.get("raw", ""),
-        "model": "remote-lora-ministral-3b",
+        "model": "BenBarr/flystral",
         "inference_ms": data.get("inference_ms"),
         "timestamp": time.time(),
         "tool_calls_made": [],
-        "source": "remote_finetuned",
+        "source": "finetuned",
     }
 
-
-def _has_local_adapter() -> bool:
-    """Check if a local LoRA adapter is available."""
-    if not FLYSTRAL_ADAPTER_PATH:
-        return False
-    return Path(FLYSTRAL_ADAPTER_PATH).exists() and (
-        (Path(FLYSTRAL_ADAPTER_PATH) / "adapter_config.json").exists()
-    )
-
-
-_local_model = None
-_local_processor = None
-
-
-def _load_local_model():
-    """Lazy-load the base model + LoRA adapter. Cached after first call."""
-    global _local_model, _local_processor
-    if _local_model is not None:
-        return _local_model, _local_processor
-
-    import torch
-    from transformers import AutoProcessor, Mistral3ForConditionalGeneration
-    from peft import PeftModel
-
-    base_id = "mistralai/Ministral-3-3B-Instruct-2512-BF16"
-
-    if torch.backends.mps.is_available():
-        device = "mps"
-        dtype = torch.float16
-    elif torch.cuda.is_available():
-        device = "cuda"
-        dtype = torch.bfloat16
-    else:
-        device = "cpu"
-        dtype = torch.float32
-
-    print(f"[Flystral] Loading {base_id} on {device}...")
-    processor = AutoProcessor.from_pretrained(base_id)
-
-    model = Mistral3ForConditionalGeneration.from_pretrained(
-        base_id, torch_dtype=dtype, low_cpu_mem_usage=True,
-    )
-    model = PeftModel.from_pretrained(model, FLYSTRAL_ADAPTER_PATH)
-    model = model.merge_and_unload()
-    model = model.to(device)
-    model.eval()
-    print(f"[Flystral] Model loaded on {device}")
-
-    _local_model = model
-    _local_processor = processor
-    return model, processor
-
-
-def _run_local_lora(image_b64: str, heading_rad: float = 0.0) -> dict:
-    """Run inference using the local LoRA-finetuned model."""
-    import base64
-    import io
-    import torch
-    from PIL import Image
-
-    model, processor = _load_local_model()
-    device = next(model.parameters()).device
-
-    img_bytes = base64.b64decode(image_b64)
-    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-
-    messages = [{"role": "user", "content": [
-        {"type": "image"},
-        {"type": "text", "text": "Output the raw telemetry for this frame."},
-    ]}]
-
-    text = processor.apply_chat_template(messages, add_generation_prompt=True)
-    inputs = processor(text=text, images=[img], return_tensors="pt").to(device)
-
-    with torch.no_grad():
-        output_ids = model.generate(**inputs, max_new_tokens=200, do_sample=False)
-
-    input_len = inputs["input_ids"].shape[-1]
-    raw = processor.decode(output_ids[0][input_len:], skip_special_tokens=True).strip()
-
-    values = []
-    for tok in raw.replace(",", " ").split():
-        try:
-            values.append(float(tok))
-        except ValueError:
-            continue
-
-    vx = values[0] if len(values) > 0 else 2.0
-    vy = values[1] if len(values) > 1 else 0.0
-    vz = values[2] if len(values) > 2 else 0.0
-    yaw = values[3] if len(values) > 3 else 0.0
-
-    vel = {"vx": vx, "vy": vy, "vz": vz, "yaw_rate": yaw}
-    offset = parse_velocity_output(vel, heading_rad)
-
-    return {
-        "mode": "velocity",
-        "vx": offset["vx"],
-        "vy": offset["vy"],
-        "vz": offset["vz"],
-        "yaw_rate": offset["yaw_rate"],
-        "offset": offset,
-        "raw": raw,
-        "model": "local-lora-ministral-3b",
-        "timestamp": time.time(),
-        "tool_calls_made": [],
-        "source": "local_finetuned",
-    }
 
 # ── Shared state (set by server.py) ──────────────────────────────────────────
 
@@ -342,65 +227,9 @@ def parse_structured_command(raw: str) -> dict:
     return result
 
 
-# ── Agent execution with tool loop ───────────────────────────────────────────
+# ── Agent execution ───────────────────────────────────────────────────────────
 
 MAX_TOOL_ROUNDS = 3
-
-
-def _run_finetuned(image_b64: str, heading_rad: float = 0.0) -> dict:
-    """
-    Fast path for the fine-tuned Flystral model (trained on AirSim velocity data).
-    Single inference call — no tools, no multi-turn. The model outputs
-    body-frame velocities directly from the camera image.
-    """
-    from mistralai import Mistral
-    client = Mistral(api_key=MISTRAL_API_KEY)
-    model = FLYSTRAL_MODEL_ID
-
-    response = client.chat.complete(
-        model=model,
-        messages=[
-            {"role": "system", "content": FINETUNED_PROMPT},
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-                    {"type": "text", "text": "Output velocity command for this frame."},
-                ],
-            },
-        ],
-        max_tokens=150,
-        temperature=0.0,
-    )
-
-    raw = (response.choices[0].message.content or "").strip()
-
-    try:
-        text = raw
-        if text.startswith("```"):
-            lines = text.split("\n")
-            text = "\n".join(l for l in lines if not l.strip().startswith("```"))
-        start = text.find("{")
-        end = text.rfind("}") + 1
-        vel = json.loads(text[start:end]) if start >= 0 and end > start else {}
-    except (json.JSONDecodeError, ValueError):
-        vel = dict(DEFAULT_VELOCITY)
-
-    offset = parse_velocity_output(vel, heading_rad)
-
-    return {
-        "mode": "velocity",
-        "vx": offset["vx"],
-        "vy": offset["vy"],
-        "vz": offset["vz"],
-        "yaw_rate": offset["yaw_rate"],
-        "offset": offset,
-        "raw": raw,
-        "model": model,
-        "timestamp": time.time(),
-        "tool_calls_made": [],
-        "source": "finetuned",
-    }
 
 
 def run_flystral_agent(
@@ -411,12 +240,9 @@ def run_flystral_agent(
     heading_rad: float = 0.0,
 ) -> dict:
     """
-    Run Flystral. Two modes:
-      1. Fine-tuned model (ft:*) — single-shot velocity vector inference from camera image.
-         Sub-second latency, no tool calls. The model was trained on AirSim drone imagery
-         to output [vx, vy, vz, yaw_rate] directly.
-      2. Base model — agentic mode with tool calls for telemetry, threat assessment,
-         and route progress, producing discrete flight commands.
+    Run Flystral. Priority:
+      1. Fine-tuned endpoint (FLYSTRAL_ENDPOINT) — BenBarr/flystral LoRA on Colab GPU
+      2. Base model fallback (ministral-3b-latest) — agentic mode via Mistral API
     """
     set_shared_state(
         telemetry or {},
@@ -424,21 +250,11 @@ def run_flystral_agent(
         route_progress,
     )
 
-    model = FLYSTRAL_MODEL_ID or MISTRAL_VISION_MODEL
-
-    # Priority 1: remote endpoint (Colab GPU serving fine-tuned model)
     if FLYSTRAL_ENDPOINT:
         try:
             return _run_remote_endpoint(image_b64, heading_rad)
         except Exception as e:
-            print(f"[Flystral] Remote endpoint failed, falling back: {e}")
-
-    # Priority 2: local LoRA adapter
-    if _has_local_adapter():
-        try:
-            return _run_local_lora(image_b64, heading_rad)
-        except Exception as e:
-            print(f"[Flystral] Local LoRA failed, falling back to API: {e}")
+            print(f"[Flystral] Endpoint failed, falling back to base model: {e}")
 
     if not MISTRAL_API_KEY:
         result = dict(DEFAULT_RESULT)
@@ -446,17 +262,15 @@ def run_flystral_agent(
         tl = (threat_assessment or {}).get("threat_level", 1)
         if tl >= 8:
             result.update(command="HOVER", param="10", altitude_adjust=-15,
-                          reasoning="DISTRESS detected — hovering above user (no API key, using fallback).")
+                          reasoning="DISTRESS detected — hovering above user.")
         elif tl >= 5:
             result.update(param="0.3", altitude_adjust=-5,
-                          reasoning="Caution — slowing and lowering altitude (no API key, using fallback).")
+                          reasoning="Caution — slowing and lowering altitude.")
         result["source"] = "no_key_fallback"
         result["tool_calls_made"] = []
         return result
 
-    # Priority 2: Mistral API fine-tuned model (ft:* prefix)
-    if _is_finetuned_model(model):
-        return _run_finetuned(image_b64, heading_rad)
+    model = MISTRAL_EDGE_MODEL
 
     messages = [
         {"role": "system", "content": SYSTEM_PROMPT},

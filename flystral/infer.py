@@ -7,7 +7,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import FLYSTRAL_MODEL_ID, MISTRAL_API_KEY
+from config import MISTRAL_EDGE_MODEL, MISTRAL_API_KEY
 
 USER_PROMPT = (
     "You are Flystral, a drone autopilot AI. "
@@ -34,7 +34,7 @@ def get_command(image_base64: str) -> dict:
         client = Mistral(api_key=MISTRAL_API_KEY)
 
         response = client.chat.complete(
-            model=FLYSTRAL_MODEL_ID,
+            model=MISTRAL_EDGE_MODEL,
             messages=[
                 {
                     "role": "user",

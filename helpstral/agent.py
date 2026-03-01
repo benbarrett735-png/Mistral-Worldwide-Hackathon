@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import HELPSTRAL_MODEL_ID, MISTRAL_API_KEY, MISTRAL_VISION_MODEL
+from config import MISTRAL_API_KEY, MISTRAL_VISION_MODEL
 
 SYSTEM_PROMPT = (
     "You are Helpstral, a safety AI monitoring a drone escort camera feed protecting a person "
@@ -264,7 +264,7 @@ def run_helpstral_agent(
         from mistralai import Mistral
         client = Mistral(api_key=MISTRAL_API_KEY)
 
-        model = HELPSTRAL_MODEL_ID or MISTRAL_VISION_MODEL
+        model = MISTRAL_VISION_MODEL
 
         for _round in range(MAX_TOOL_ROUNDS + 1):
             response = client.chat.complete(
