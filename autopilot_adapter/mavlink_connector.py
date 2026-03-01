@@ -70,25 +70,24 @@ def connect(connection_string: str) -> mavutil.mavlink_connection:
     log(f"Connecting to {connection_string}...")
     mav = mavutil.mavlink_connection(connection_string)
     log("Waiting for heartbeat...")
-    mav.wait_heartbeat(timeout=60)
+    mav.wait_heartbeat(timeout=30)
     log(f"Heartbeat: system {mav.target_system}")
 
     mav.mav.request_data_stream_send(
         mav.target_system, mav.target_component,
-        mavutil.mavlink.MAV_DATA_STREAM_ALL, 4, 1,
+        mavutil.mavlink.MAV_DATA_STREAM_ALL, 10, 1,
     )
 
     log("Waiting for GPS fix...")
-    for _ in range(30):
-        pos = mav.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=3)
+    for _ in range(10):
+        pos = mav.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=2)
         if pos and abs(pos.lat / 1e7) > 1:
             log(f"Position: {pos.lat / 1e7:.6f}, {pos.lon / 1e7:.6f}")
             break
-        time.sleep(1)
+        time.sleep(0.5)
     else:
         log("WARNING: No GPS fix")
 
-    time.sleep(2)
     return mav
 
 
@@ -100,7 +99,7 @@ def _set_param(mav, name: str, value: float):
         float(value),
         mavutil.mavlink.MAV_PARAM_TYPE_REAL32,
     )
-    time.sleep(0.3)
+    time.sleep(0.05)
 
 
 def set_wpnav_speed(mav, speed_m_s: float):
@@ -122,7 +121,7 @@ def set_mode(mav, mode_name: str):
         log(f"Unknown mode: {mode_name}")
         return
     mav.set_mode(mode_id)
-    time.sleep(1)
+    time.sleep(0.3)
     log(f"Mode → {mode_name}")
 
 
@@ -219,37 +218,36 @@ def arm_and_takeoff(mav, altitude: float):
         mav.target_system, mav.target_component,
         b'ARMING_CHECK', 0, mavutil.mavlink.MAV_PARAM_TYPE_INT32,
     )
-    time.sleep(1)
+    time.sleep(0.3)
 
-    # Check if already armed and airborne
     pos = get_position(mav)
-    hb = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=3)
+    hb = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=2)
     already_armed = hb and (hb.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
     already_airborne = pos and pos[2] > 3.0
 
     if already_armed and already_airborne:
         log(f"Already armed and airborne at {pos[2]:.1f}m")
         set_mode(mav, "GUIDED")
-        time.sleep(1)
+        time.sleep(0.3)
         log("Ready for navigation")
         return
 
     set_mode(mav, "GUIDED")
-    time.sleep(2)
+    time.sleep(0.5)
 
-    for attempt in range(10):
-        log(f"Arming ({attempt + 1}/10)...")
+    for attempt in range(5):
+        log(f"Arming ({attempt + 1}/5)...")
         mav.arducopter_arm()
-        ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=3)
+        ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=2)
         if ack:
             log(f"  ACK: cmd={ack.command} result={ack.result}")
-        for _ in range(20):
-            hb = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=1)
+        for _ in range(10):
+            hb = mav.recv_match(type='HEARTBEAT', blocking=True, timeout=0.5)
             if hb and (hb.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED):
                 log("Armed")
                 break
         else:
-            time.sleep(2)
+            time.sleep(1)
             continue
         break
     else:
@@ -262,32 +260,28 @@ def arm_and_takeoff(mav, altitude: float):
         0, 0, 0, 0, 0, 0, 0, altitude,
     )
 
-    ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=5)
+    ack = mav.recv_match(type='COMMAND_ACK', blocking=True, timeout=3)
     if ack:
         log(f"  Takeoff ACK: cmd={ack.command} result={ack.result}")
 
-    for _ in range(120):
-        msg = mav.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=2)
+    for _ in range(60):
+        msg = mav.recv_match(type="GLOBAL_POSITION_INT", blocking=True, timeout=1)
         if msg:
             alt_now = msg.relative_alt / 1000.0
             if alt_now >= altitude * 0.85:
                 log(f"Reached {alt_now:.1f}m")
                 break
-        time.sleep(0.5)
+        time.sleep(0.3)
     else:
         log("WARNING: Takeoff altitude not confirmed")
 
-    # After NAV_TAKEOFF, the autopilot enters a takeoff sub-state.
-    # We need to wait for it to complete, then the position targets work.
-    log("Waiting for takeoff state to clear...")
-    time.sleep(5)
+    time.sleep(1)
 
-    # Verify we can control position by sending current position as target
     pos = get_position(mav)
     if pos:
-        log(f"Sending position hold at {pos[0]:.6f}, {pos[1]:.6f}, {pos[2]:.1f}m")
+        log(f"Position hold at {pos[0]:.6f}, {pos[1]:.6f}, {pos[2]:.1f}m")
         fly_to(mav, pos[0], pos[1], pos[2])
-        time.sleep(2)
+        time.sleep(0.5)
 
     log("Ready for navigation")
 
@@ -340,6 +334,9 @@ def live_follow_loop(mav, follow_distance_m: float, track_alt: float, total_wayp
                     offset_dlat = float(msg.get("dlat", 0))
                     offset_dlng = float(msg.get("dlng", 0))
                     offset_dalt = float(msg.get("dalt", 0))
+                    if "dyaw" in msg:
+                        offset_dyaw = float(msg.get("dyaw", 0))
+                        bearing_rad = (bearing_rad or 0) + math.radians(offset_dyaw)
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 pass
 

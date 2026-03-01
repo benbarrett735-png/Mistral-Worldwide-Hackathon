@@ -70,8 +70,8 @@ class TestHelpstralAgent:
     def test_tool_location_context(self):
         from helpstral.agent import tool_get_location_context
         result = json.loads(tool_get_location_context(48.86, 2.34))
-        assert "area_type" in result
-        assert "lighting_estimate" in result
+        assert "neighborhood" in result
+        assert "lighting_quality" in result
         assert "time_of_day" in result
 
     def test_tool_recent_assessments_empty(self):
@@ -207,8 +207,8 @@ class TestLouiseAgent:
     def test_tool_route_safety(self):
         from louise.agent import tool_get_route_safety
         result = json.loads(tool_get_route_safety(48.86, 2.34, 48.87, 2.35))
-        assert "safety_score" in result
-        assert 1 <= result["safety_score"] <= 10
+        assert "overall_safety_score" in result
+        assert 1 <= result["overall_safety_score"] <= 10
 
     def test_tool_escort_status_inactive(self):
         from louise.agent import tool_get_escort_status, set_shared_state
@@ -227,7 +227,7 @@ class TestLouiseAgent:
         from louise.agent import tool_get_area_info
         result = json.loads(tool_get_area_info(48.86, 2.34))
         assert "neighborhood" in result
-        assert "safety_notes" in result
+        assert "safety_score" in result
 
     def test_tool_safety_tips(self):
         from louise.agent import tool_get_safety_tips
@@ -237,9 +237,9 @@ class TestLouiseAgent:
 
     def test_tool_definitions_valid(self):
         from louise.agent import TOOLS
-        assert len(TOOLS) == 4
+        assert len(TOOLS) == 5
         names = {t["function"]["name"] for t in TOOLS}
-        assert names == {"get_route_safety", "get_escort_status", "get_area_info", "get_safety_tips"}
+        assert names == {"get_route_safety", "get_escort_status", "get_area_info", "get_safety_tips", "escalate_emergency"}
 
 
 # ── Agent loop integration tests ─────────────────────────────────────────────

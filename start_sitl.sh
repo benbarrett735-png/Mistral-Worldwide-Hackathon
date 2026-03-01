@@ -21,7 +21,7 @@ fi
 echo "Cleaning up..."
 pkill -f "arducopter.*--model" 2>/dev/null || true
 pkill -f mavproxy 2>/dev/null || true
-sleep 2
+sleep 1
 
 rm -f "$ARDUPILOT_DIR/eeprom.bin"
 

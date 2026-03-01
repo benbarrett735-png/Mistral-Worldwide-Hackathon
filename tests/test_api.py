@@ -127,13 +127,15 @@ async def test_post_route_outside_bounds_returns_400(async_client):
 
 
 @pytest.mark.asyncio
-async def test_post_order_when_mission_in_progress_returns_409(async_client, monkeypatch):
-    """POST /api/order returns 409 when a mission is already in progress."""
+async def test_post_order_when_mission_in_progress_auto_cancels(async_client, monkeypatch):
+    """POST /api/order auto-cancels any in-progress mission and replans."""
     import server as server_module
     monkeypatch.setattr(server_module, "_mission_in_progress", True)
     response = await async_client.post(
         "/api/order",
         json={"origin": [48.86, 2.34], "destination": [48.85, 2.36]},
     )
-    assert response.status_code == 409
+    assert response.status_code == 200
+    data = response.json()
+    assert data.get("status") == "planned"
     monkeypatch.setattr(server_module, "_mission_in_progress", False)

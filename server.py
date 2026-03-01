@@ -27,7 +27,9 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from config import (
     BASE_PRICE_EUR,
+    CITY_HUBS,
     CURRENCY,
+    DEFAULT_CITY,
     DRONE_HUB,
     FLYSTRAL_MODEL_ID,
     GEOFENCE_BOUNDS,
@@ -60,6 +62,41 @@ from flystral.agent import (
 from louise.agent import run_louise_agent, set_shared_state as louise_set_state
 
 app = FastAPI(title="Louise API")
+
+_sitl_warm = False  # True once SITL is confirmed ready (EKF warm)
+_sitl_city: str | None = None  # Which city SITL is currently positioned at
+
+
+@app.on_event("startup")
+async def _prewarm_sitl():
+    """Kick off SITL pre-warm in background so server starts accepting requests immediately."""
+    use_real = MAV_CONNECTION is not None and MAV_CONNECTION.strip() != ""
+    if use_real:
+        global _sitl_warm
+        _sitl_warm = True
+        return
+    asyncio.create_task(_do_prewarm_sitl())
+
+
+async def _do_prewarm_sitl():
+    """Background task: start SITL and wait for it to be ready."""
+    global _sitl_warm, _sitl_city
+    _log_event("sitl_prewarm_start")
+    already = await _check_sitl_running()
+    if not already:
+        try:
+            await sitl_start(city=DEFAULT_CITY)
+        except Exception:
+            _log_event("sitl_prewarm_failed")
+            return
+    for _ in range(40):
+        await asyncio.sleep(1.5)
+        if await _check_sitl_running():
+            _sitl_warm = True
+            _sitl_city = DEFAULT_CITY
+            _log_event("sitl_prewarm_done", city=DEFAULT_CITY)
+            return
+    _log_event("sitl_prewarm_timeout")
 
 
 def _log_event(event: str, **kwargs):
@@ -127,15 +164,13 @@ class ConnectionManager:
                 global _mission_in_progress
                 _mission_in_progress = True
                 start_autonomous_agent_loop()
-                # Kill MAVProxy so connector can connect to TCP 5760 directly
-                # SITL stays running with warm EKF
                 kill_proxy = await asyncio.create_subprocess_exec(
                     "pkill", "-f", "mavproxy",
                     stdout=asyncio.subprocess.DEVNULL,
                     stderr=asyncio.subprocess.DEVNULL,
                 )
                 await kill_proxy.wait()
-                await asyncio.sleep(2)
+                await asyncio.sleep(0.5)
 
                 proc = await asyncio.create_subprocess_exec(
                     sys.executable, "-u",
@@ -427,15 +462,29 @@ def stop_autonomous_agent_loop():
     _agent_loop_task = None
 
 
-def _in_bounds(lat: float, lng: float) -> bool:
-    """Check if lat/lng is within GEOFENCE_BOUNDS."""
-    b = GEOFENCE_BOUNDS
+def _get_city_bounds(city: str | None = None) -> dict:
+    """Get geofence bounds for a city, falling back to default."""
+    if city and city in CITY_HUBS:
+        return CITY_HUBS[city]["bounds"]
+    return GEOFENCE_BOUNDS
+
+
+def _get_city_hub(city: str | None = None) -> dict:
+    """Get hub coords for a city, falling back to default."""
+    if city and city in CITY_HUBS:
+        return CITY_HUBS[city]["hub"]
+    return DRONE_HUB
+
+
+def _in_bounds(lat: float, lng: float, city: str | None = None) -> bool:
+    """Check if lat/lng is within geofence bounds (city-aware)."""
+    b = _get_city_bounds(city)
     return b["lat_min"] <= lat <= b["lat_max"] and b["lng_min"] <= lng <= b["lng_max"]
 
 
-def _clamp_position(lat: float, lng: float) -> tuple[float, float]:
+def _clamp_position(lat: float, lng: float, city: str | None = None) -> tuple[float, float]:
     """Clamp lat/lng to geofence bounds so connector never gets invalid targets."""
-    b = GEOFENCE_BOUNDS
+    b = _get_city_bounds(city)
     return (
         max(b["lat_min"], min(b["lat_max"], lat)),
         max(b["lng_min"], min(b["lng_max"], lng)),
@@ -499,12 +548,14 @@ async def websocket_endpoint(ws: WebSocket):
 class RouteRequest(BaseModel):
     origin: list[float]       # [lat, lng]
     destination: list[float]  # [lat, lng]
+    city: Optional[str] = None
 
 
 class OrderRequest(BaseModel):
     origin: list[float]
     destination: list[float]
     route: Optional[list[list[float]]] = None  # ORS polyline coords [[lng, lat], ...]
+    city: Optional[str] = None
 
 
 class EmergencyRequest(BaseModel):
@@ -517,8 +568,8 @@ class EmergencyRequest(BaseModel):
 @app.post("/api/emergency")
 async def emergency_http(req: EmergencyRequest):
     """HTTP fallback for emergency alerts (when WebSocket is down)."""
-    lat = req.lat or (req.origin[0] if req.origin else None)
-    lng = req.lng or (req.origin[1] if req.origin else None)
+    lat = req.lat or (req.origin[0] if req.origin and len(req.origin) >= 2 else None)
+    lng = req.lng or (req.origin[1] if req.origin and len(req.origin) >= 2 else None)
     payload = {
         "type": "emergency",
         "lat": lat, "lng": lng,
@@ -546,7 +597,7 @@ class LouiseRequest(BaseModel):
 
 @app.get("/api/config")
 async def get_config():
-    """Public config for clients: hub, service area, pricing, track altitude. No secrets."""
+    """Public config for clients: cities with hubs, service areas, pricing, track altitude."""
     return {
         "hub": DRONE_HUB,
         "bounds": GEOFENCE_BOUNDS,
@@ -554,6 +605,10 @@ async def get_config():
         "base_price_eur": BASE_PRICE_EUR,
         "price_per_km_eur": PRICE_PER_KM_EUR,
         "currency": CURRENCY,
+        "cities": {k: {"name": v["name"], "hub": v["hub"], "center": v["center"],
+                        "bounds": v["bounds"], "country": v["country"],
+                        "viewbox": v["viewbox"], "zoom": v["zoom"]}
+                   for k, v in CITY_HUBS.items()},
     }
 
 
@@ -562,7 +617,7 @@ async def get_estimate(req: RouteRequest):
     """Return distance (km) and price estimate using OSRM walking route distance (not straight-line)."""
     lat1, lng1 = req.origin
     lat2, lng2 = req.destination
-    if not _in_bounds(lat1, lng1) or not _in_bounds(lat2, lng2):
+    if not _in_bounds(lat1, lng1, req.city) or not _in_bounds(lat2, lng2, req.city):
         raise HTTPException(status_code=400, detail="Origin or destination outside service area.")
 
     # Use real walking route distance from OSRM, fall back to straight-line
@@ -581,8 +636,8 @@ async def get_estimate(req: RouteRequest):
     if route_distance_m is None:
         route_distance_m = wp_haversine(lat1, lng1, lat2, lng2)
 
-    # Hub approach + return distances (straight-line, as drone flies)
-    hub_lat, hub_lng = DRONE_HUB["lat"], DRONE_HUB["lng"]
+    city_hub = _get_city_hub(req.city)
+    hub_lat, hub_lng = city_hub["lat"], city_hub["lng"]
     approach_m = wp_haversine(hub_lat, hub_lng, lat1, lng1)
     return_m = wp_haversine(lat2, lng2, hub_lat, hub_lng)
     total_flight_m = approach_m + route_distance_m + return_m
@@ -666,42 +721,23 @@ def _price_from_distance(distance_m: float, origin: tuple, dest: tuple) -> dict:
 @app.post("/api/route")
 async def get_route(req: RouteRequest):
     """
-    Get a walking route + pricing in one call (OSRM, ORS fallback, straight-line fallback).
+    Get a pedestrian walking route + pricing in one call.
+    Priority: ORS foot-walking (best pedestrian paths) → OSRM foot → straight-line.
     Returns coords as [[lng, lat], ...] plus price estimate. Always returns coords.
     """
     lat1, lng1 = req.origin
     lat2, lng2 = req.destination
-    if not _in_bounds(lat1, lng1) or not _in_bounds(lat2, lng2):
+    if not _in_bounds(lat1, lng1, req.city) or not _in_bounds(lat2, lng2, req.city):
         raise HTTPException(status_code=400, detail="Origin or destination is outside the service area.")
 
-    cache_key = f"{lat1:.5f},{lng1:.5f}-{lat2:.5f},{lng2:.5f}"
+    cache_key = f"{req.city or 'default'}:{lat1:.5f},{lng1:.5f}-{lat2:.5f},{lng2:.5f}"
     if cache_key in _route_cache:
         return _route_cache[cache_key]
 
     result = None
-    try:
-        async with _http_client() as client:
-            url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson&steps=true&continue_straight=true&alternatives=false"
-            resp = await client.get(url)
-            resp.raise_for_status()
-            data = resp.json()
-            if data.get("routes") and len(data["routes"]) > 0:
-                route = data["routes"][0]
-                coords = route["geometry"]["coordinates"]
-                if coords and len(coords) >= 2:
-                    dist_m = route.get("distance") or wp_haversine(lat1, lng1, lat2, lng2)
-                    result = {
-                        "coords": coords,
-                        "distance_m": route.get("distance"),
-                        "duration_s": route.get("duration"),
-                        "points": len(coords),
-                        "source": "osrm",
-                        "price": _price_from_distance(dist_m, req.origin, req.destination),
-                    }
-    except Exception:
-        pass
 
-    if result is None and ORS_API_KEY:
+    # Try ORS first — best pedestrian routing (parks, footpaths, stairs, pedestrian zones)
+    if ORS_API_KEY:
         try:
             async with _http_client() as client:
                 resp = await client.post(
@@ -712,13 +748,41 @@ async def get_route(req: RouteRequest):
                 resp.raise_for_status()
                 data = resp.json()
                 if data.get("features") and len(data["features"]) > 0:
-                    coords = data["features"][0]["geometry"]["coordinates"]
-                    if coords:
-                        dist_m = wp_haversine(lat1, lng1, lat2, lng2)
+                    feat = data["features"][0]
+                    coords = feat["geometry"]["coordinates"]
+                    props = feat.get("properties", {}).get("summary", {})
+                    if coords and len(coords) >= 2:
+                        dist_m = props.get("distance") or wp_haversine(lat1, lng1, lat2, lng2)
                         result = {
                             "coords": coords,
-                            "source": "ors",
+                            "distance_m": props.get("distance"),
+                            "duration_s": props.get("duration"),
                             "points": len(coords),
+                            "source": "ors",
+                            "price": _price_from_distance(dist_m, req.origin, req.destination),
+                        }
+        except Exception:
+            pass
+
+    # Fallback: OSRM foot profile
+    if result is None:
+        try:
+            async with _http_client() as client:
+                url = f"{OSRM_BASE_URL}/foot/{lng1},{lat1};{lng2},{lat2}?overview=full&geometries=geojson&steps=true&continue_straight=true&alternatives=false"
+                resp = await client.get(url)
+                resp.raise_for_status()
+                data = resp.json()
+                if data.get("routes") and len(data["routes"]) > 0:
+                    route = data["routes"][0]
+                    coords = route["geometry"]["coordinates"]
+                    if coords and len(coords) >= 2:
+                        dist_m = route.get("distance") or wp_haversine(lat1, lng1, lat2, lng2)
+                        result = {
+                            "coords": coords,
+                            "distance_m": route.get("distance"),
+                            "duration_s": route.get("duration"),
+                            "points": len(coords),
+                            "source": "osrm",
                             "price": _price_from_distance(dist_m, req.origin, req.destination),
                         }
         except Exception:
@@ -751,16 +815,17 @@ async def order_drone(req: OrderRequest):
     Generate ArduPilot waypoint files for all 3 phases and broadcast to Mission Control.
     The route from the user app (OSRM walking polyline) is used directly as escort waypoints
     so the drone follows the exact walking route, not a straight line.
-    Returns 409 if a mission is already in progress (connector running).
+    Auto-cancels any in-progress mission before planning the new one.
     """
     global _current_mission, _mission_in_progress
     async with _mission_lock:
         if _mission_in_progress:
             await _force_cancel_mission()
-    hub = (DRONE_HUB["lat"], DRONE_HUB["lng"])
+    city_hub = _get_city_hub(req.city)
+    hub = (city_hub["lat"], city_hub["lng"])
     lat1, lng1 = req.origin
     lat2, lng2 = req.destination
-    if not _in_bounds(lat1, lng1) or not _in_bounds(lat2, lng2):
+    if not _in_bounds(lat1, lng1, req.city) or not _in_bounds(lat2, lng2, req.city):
         raise HTTPException(status_code=400, detail="Origin or destination is outside the service area. Please choose locations within the supported region.")
 
     route_coords = req.route
@@ -811,11 +876,12 @@ async def order_drone(req: OrderRequest):
         "type": "mission_update",
         "routes": routes,
         "stats": mission["stats"],
-        "hub": DRONE_HUB,
+        "hub": city_hub,
         "user": mission["user"],
         "destination": mission["destination"],
         "approach_eta_s": approach_eta_s,
         "files": files,
+        "city": req.city,
     }
 
     mission_id = str(uuid.uuid4())[:8]
@@ -826,6 +892,7 @@ async def order_drone(req: OrderRequest):
         "broadcast": broadcast_msg,
         "status": "planned",
         "created_at": time.time(),
+        "city": req.city,
     }
     broadcast_msg["mission_id"] = mission_id
 
@@ -840,11 +907,11 @@ async def order_drone(req: OrderRequest):
 
     await manager.broadcast({
         "type": "position",
-        "lat": DRONE_HUB["lat"], "lng": DRONE_HUB["lng"], "alt": 0,
+        "lat": city_hub["lat"], "lng": city_hub["lng"], "alt": 0,
         "phase": "idle", "source": "hub_reset",
     })
     await manager.broadcast(broadcast_msg)
-    _log_event("mission_planned", mission_id=mission_id, waypoints=mission["stats"].get("total_waypoints"), hub_lat=DRONE_HUB["lat"])
+    _log_event("mission_planned", mission_id=mission_id, waypoints=mission["stats"].get("total_waypoints"), hub_lat=city_hub["lat"])
 
     # Calculate accurate price from mission waypoint distances
     escort_wps = mission["escort"]
@@ -858,7 +925,7 @@ async def order_drone(req: OrderRequest):
 
     return {
         "status": "planned",
-        "hub": DRONE_HUB,
+        "hub": city_hub,
         "stats": mission["stats"],
         "approach_eta_s": approach_eta_s,
         "files": files,
@@ -882,20 +949,28 @@ async def start_mission_endpoint():
     - Otherwise: starts ArduPilot SITL if not already running
     - Falls back to mock simulator only if ArduCopter binary not found
     """
+    global _sitl_warm, _sitl_city
     if _current_mission is None:
         raise HTTPException(status_code=400, detail="No mission planned. Call POST /api/order first.")
 
     use_real_drone = MAV_CONNECTION is not None and MAV_CONNECTION.strip() != ""
+    mission_city = _current_mission.get("city") or DEFAULT_CITY
 
-    # Always try ArduPilot — start SITL if it's not running
     if not use_real_drone:
-        sitl_running = await _check_sitl_running()
+        # If SITL is running for a different city, kill it and restart at the correct hub
+        if _sitl_city and _sitl_city != mission_city and await _check_sitl_running():
+            _log_event("sitl_city_mismatch", was=_sitl_city, need=mission_city)
+            await manager.broadcast({"type": "sitl_status", "status": "relocating"})
+            await _kill_existing_sitl()
+            _sitl_warm = False
+
+        sitl_running = _sitl_warm or await _check_sitl_running()
         if not sitl_running:
             try:
                 await manager.broadcast({"type": "sitl_status", "status": "starting"})
-                await sitl_start()
-                for _ in range(20):
-                    await asyncio.sleep(2)
+                await sitl_start(city=mission_city)
+                for _ in range(15):
+                    await asyncio.sleep(1)
                     if await _check_sitl_running():
                         sitl_running = True
                         break
@@ -906,9 +981,14 @@ async def start_mission_endpoint():
                 _log_event("sitl_fallback_to_mock")
                 return await _start_mock_mission()
 
-        await manager.broadcast({"type": "sitl_status", "status": "warming_up"})
-        if not await _wait_for_sitl_ready(timeout=30):
-            await manager.broadcast({"type": "sitl_log", "message": "EKF warmup timeout — proceeding"})
+        if _sitl_warm and _sitl_city == mission_city:
+            await manager.broadcast({"type": "sitl_status", "status": "running"})
+        else:
+            await manager.broadcast({"type": "sitl_status", "status": "warming_up"})
+            if not await _wait_for_sitl_ready(timeout=20):
+                await manager.broadcast({"type": "sitl_log", "message": "EKF warmup timeout — proceeding"})
+            _sitl_warm = True
+            _sitl_city = mission_city
 
     await manager.broadcast({"type": "sitl_status", "status": "running"})
     out_dir = Path("autopilot_adapter/output")
@@ -1047,6 +1127,7 @@ async def list_missions():
 
 async def _kill_existing_sitl():
     """Kill any running SITL and MAVProxy so next launch starts fresh at the hub."""
+    global _sitl_process, _sitl_warm, _sitl_city
     if manager.sim_task and not manager.sim_task.done():
         manager.sim_task.cancel()
     for name in ["arducopter", "mavproxy"]:
@@ -1056,9 +1137,10 @@ async def _kill_existing_sitl():
             stderr=asyncio.subprocess.DEVNULL,
         )
         await p.wait()
-    global _sitl_process
     _sitl_process = None
-    await asyncio.sleep(2)
+    _sitl_warm = False
+    _sitl_city = None
+    await asyncio.sleep(0.5)
 
 
 async def _check_sitl_running() -> bool:
@@ -1075,7 +1157,7 @@ async def _check_sitl_running() -> bool:
             stderr=asyncio.subprocess.DEVNULL,
             cwd=str(Path(__file__).parent),
         )
-        await asyncio.wait_for(proc.wait(), timeout=6.0)
+        await asyncio.wait_for(proc.wait(), timeout=3.0)
         return proc.returncode == 0
     except (asyncio.TimeoutError, Exception):
         return False
@@ -1090,7 +1172,7 @@ async def _wait_for_sitl_ready(timeout: float = 90) -> bool:
             text = log_path.read_text()
             if "EKF3 IMU0 is using GPS" in text and "EKF3 IMU1 is using GPS" in text:
                 return True
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
     return await _check_sitl_running()
 
 
@@ -1139,19 +1221,39 @@ async def flystral(req: FlystralRequest):
     global _latest_flystral
     _latest_flystral = result
 
-    command = result.get("command", "FOLLOW")
-    param = str(result.get("param", "0.5"))
-    alt_adjust = result.get("altitude_adjust", 0)
+    flystral_mode = result.get("mode", "discrete")
 
-    await manager.broadcast({"type": "flystral", "command": command, "param": param})
+    if flystral_mode == "velocity":
+        offset = result.get("offset", {})
+        await manager.broadcast({
+            "type": "flystral",
+            "mode": "velocity",
+            "vx": result.get("vx", 0),
+            "vy": result.get("vy", 0),
+            "vz": result.get("vz", 0),
+            "yaw_rate": result.get("yaw_rate", 0),
+        })
+        await _send_to_connector({
+            "type": "flystral_offset",
+            "dlat": offset.get("dlat", 0),
+            "dlng": offset.get("dlng", 0),
+            "dalt": offset.get("dalt", 0),
+            "dyaw": offset.get("dyaw", 0),
+        })
+    else:
+        command = result.get("command", "FOLLOW")
+        param = str(result.get("param", "0.5"))
+        alt_adjust = result.get("altitude_adjust", 0)
 
-    if command in FLYSTRAL_VALID_COMMANDS:
-        ref = {"lat": 0.0, "lng": 0.0, "alt": 0.0}
-        updated = parse_to_waypoint_update(command, param, ref)
-        dlat = updated.get("lat", 0.0) - ref["lat"]
-        dlng = updated.get("lng", 0.0) - ref["lng"]
-        dalt = updated.get("alt", 0.0) - ref["alt"] + alt_adjust
-        await _send_to_connector({"type": "flystral_offset", "dlat": dlat, "dlng": dlng, "dalt": dalt})
+        await manager.broadcast({"type": "flystral", "command": command, "param": param})
+
+        if command in FLYSTRAL_VALID_COMMANDS:
+            ref = {"lat": 0.0, "lng": 0.0, "alt": 0.0}
+            updated = parse_to_waypoint_update(command, param, ref)
+            dlat = updated.get("lat", 0.0) - ref["lat"]
+            dlng = updated.get("lng", 0.0) - ref["lng"]
+            dalt = updated.get("alt", 0.0) - ref["alt"] + alt_adjust
+            await _send_to_connector({"type": "flystral_offset", "dlat": dlat, "dlng": dlng, "dalt": dalt})
 
     return result
 
@@ -1199,25 +1301,31 @@ _sitl_process: Optional[subprocess.Popen] = None
 
 
 @app.post("/api/sitl/start")
-async def sitl_start():
+async def sitl_start_endpoint():
+    """HTTP endpoint wrapper for sitl_start."""
+    return await sitl_start()
+
+
+async def sitl_start(city: str | None = None):
     """
-    Start ArduPilot SITL in the background so Mission Control can run the live demo
-    without opening a terminal. SITL may take 30–90s to be ready; poll /api/sitl/status.
+    Start ArduPilot SITL at the hub for the given city.
     """
-    global _sitl_process
+    global _sitl_process, _sitl_city
     if _sitl_process is not None and _sitl_process.poll() is None:
         return {"status": "already_running", "message": "SITL is already starting or running."}
+
+    hub = _get_city_hub(city)
 
     project_root = Path(__file__).parent
     start_script = project_root / "start_sitl.sh"
     if not start_script.exists():
         raise HTTPException(status_code=500, detail="start_sitl.sh not found.")
 
-    # Write SITL home from config so start_sitl.sh uses same hub as missions (Louvre)
     out_dir = project_root / "autopilot_adapter" / "output"
     out_dir.mkdir(parents=True, exist_ok=True)
     home_file = out_dir / "sitl_home.txt"
-    home_file.write_text(f"{DRONE_HUB['lat']},{DRONE_HUB['lng']},35.0,0.0")
+    home_file.write_text(f"{hub['lat']},{hub['lng']},35.0,0.0")
+    _sitl_city = city
 
     log_path = out_dir / "sitl.log"
     try:
@@ -1245,6 +1353,57 @@ async def sitl_start():
 async def sitl_status():
     """Return whether ArduPilot SITL is reachable on UDP 14550."""
     return {"running": await _check_sitl_running()}
+
+
+# ── /api/route-safety — fast safety score for route card ──────────────────────
+class RouteSafetyRequest(BaseModel):
+    origin: list[float]
+    destination: list[float]
+
+
+@app.post("/api/route-safety")
+async def route_safety(req: RouteSafetyRequest):
+    """
+    Fast safety check for a route: samples the midpoint and destination
+    for streetlight density, lit roads, and POIs from real OSM data.
+    Returns a composite score + brief summary without requiring Mistral.
+    """
+    lat1, lng1 = req.origin
+    lat2, lng2 = req.destination
+    try:
+        from geo_intel import compute_area_safety_score
+        mid_lat = (lat1 + lat2) / 2
+        mid_lng = (lng1 + lng2) / 2
+        mid = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: compute_area_safety_score(mid_lat, mid_lng)
+        )
+        dest = await asyncio.get_event_loop().run_in_executor(
+            None, lambda: compute_area_safety_score(lat2, lng2)
+        )
+        avg = round((mid["safety_score"] + dest["safety_score"]) / 2)
+        avg = max(1, min(10, avg))
+
+        if avg >= 7:
+            summary = "Well-lit route with good foot traffic"
+            level = "good"
+        elif avg >= 5:
+            summary = "Moderate lighting — drone escort recommended"
+            level = "moderate"
+        else:
+            summary = "Low lighting & foot traffic — escort strongly recommended"
+            level = "poor"
+
+        return {
+            "score": avg,
+            "level": level,
+            "summary": summary,
+            "lighting": mid.get("lighting_quality", "unknown"),
+            "foot_traffic": mid.get("foot_traffic_level", "unknown"),
+            "streetlights": mid.get("streetlights_nearby", 0) + dest.get("streetlights_nearby", 0),
+            "neighborhood": mid.get("neighborhood", "Unknown"),
+        }
+    except Exception:
+        return {"score": 5, "level": "moderate", "summary": "Safety data unavailable", "lighting": "unknown"}
 
 
 # ── Health check ───────────────────────────────────────────────────────────────

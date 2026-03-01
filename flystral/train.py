@@ -1,6 +1,10 @@
 """
 Flystral fine-tuning script.
-Fine-tunes Ministral 3B via the Mistral Fine-tuning API for vision-to-command output.
+Fine-tunes Ministral 3B via the Mistral Fine-tuning API for vision-to-velocity output.
+
+The fine-tuned model takes a drone camera image and outputs body-frame velocity vectors
+{vx, vy, vz, yaw_rate} trained on 10,000 AirSim drone flight recordings. This approach
+preserves the continuous nature of the flight control data rather than discretizing it.
 
 Model choice: Ministral 3B chosen over Pixtral 12B for Flystral because drone flight
 control requires sub-second response times. The 3B model runs ~4x faster at inference,

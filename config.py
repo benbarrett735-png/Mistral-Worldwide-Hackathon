@@ -19,18 +19,42 @@ OSRM_BASE_URL = "http://router.project-osrm.org/route/v1"
 ORS_API_KEY = os.getenv("ORS_API_KEY", "")
 ORS_BASE_URL = "https://api.openrouteservice.org/v2"
 
-# Paris — drone centre hard-set at the Louvre (all drones depart and return here)
-PARIS_CENTER = {"lat": 48.8566, "lng": 2.3522}
-DRONE_HUB = {"lat": 48.8606, "lng": 2.3376, "label": "Louise Drone Centre — Louvre, Paris"}
-
-# Geofence — service area (lat/lng bounds). None = no check.
-# Format: {"lat_min", "lat_max", "lng_min", "lng_max"} or None
-GEOFENCE_BOUNDS = {
-    "lat_min": float(os.getenv("GEOFENCE_LAT_MIN", "48.80")),
-    "lat_max": float(os.getenv("GEOFENCE_LAT_MAX", "48.92")),
-    "lng_min": float(os.getenv("GEOFENCE_LNG_MIN", "2.22")),
-    "lng_max": float(os.getenv("GEOFENCE_LNG_MAX", "2.47")),
+# Multi-city hubs — each city has a drone centre, map centre, geofence, and search config
+CITY_HUBS = {
+    "paris": {
+        "name": "Paris",
+        "hub": {"lat": 48.8606, "lng": 2.3376, "label": "Louise Drone Centre — Louvre, Paris"},
+        "center": {"lat": 48.8566, "lng": 2.3522},
+        "bounds": {"lat_min": 48.80, "lat_max": 48.92, "lng_min": 2.22, "lng_max": 2.47},
+        "country": "fr",
+        "viewbox": "2.2,48.92,2.47,48.80",
+        "zoom": 14,
+    },
+    "dublin": {
+        "name": "Dublin",
+        "hub": {"lat": 53.3441, "lng": -6.2675, "label": "Louise Drone Centre — Trinity College, Dublin"},
+        "center": {"lat": 53.3498, "lng": -6.2603},
+        "bounds": {"lat_min": 53.28, "lat_max": 53.42, "lng_min": -6.40, "lng_max": -6.10},
+        "country": "ie",
+        "viewbox": "-6.40,53.42,-6.10,53.28",
+        "zoom": 14,
+    },
+    "london": {
+        "name": "London",
+        "hub": {"lat": 51.5014, "lng": -0.1419, "label": "Louise Drone Centre — Buckingham Palace, London"},
+        "center": {"lat": 51.5074, "lng": -0.1278},
+        "bounds": {"lat_min": 51.40, "lat_max": 51.60, "lng_min": -0.30, "lng_max": 0.10},
+        "country": "gb",
+        "viewbox": "-0.30,51.60,0.10,51.40",
+        "zoom": 13,
+    },
 }
+
+DEFAULT_CITY = os.getenv("DEFAULT_CITY", "paris")
+DRONE_HUB = CITY_HUBS[DEFAULT_CITY]["hub"]
+PARIS_CENTER = CITY_HUBS["paris"]["center"]
+
+GEOFENCE_BOUNDS = CITY_HUBS[DEFAULT_CITY]["bounds"]
 
 # Pricing — distance-based (e.g. €3 base + per km)
 BASE_PRICE_EUR = float(os.getenv("BASE_PRICE_EUR", "1.50"))

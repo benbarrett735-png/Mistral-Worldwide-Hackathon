@@ -4,245 +4,373 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Louise</title>
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <link rel="preconnect" href="https://unpkg.com" crossorigin>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="preconnect" href="https://a.basemaps.cartocdn.com" crossorigin>
   <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
-  <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
-  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"></noscript>
+  <link rel="preload" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" as="style" onload="this.onload=null;this.rel='stylesheet'">
+  <noscript><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap"></noscript>
   <style>
-    * { box-sizing: border-box; margin: 0; padding: 0; }
-    html, body { height: 100%; overflow: hidden; }
+    :root {
+      --bg: #ffffff;
+      --fg: #0a0a0a;
+      --fg2: #555;
+      --fg3: #999;
+      --border: rgba(0,0,0,0.06);
+      --card: rgba(255,255,255,0.92);
+      --card-solid: #fff;
+      --accent: #0a0a0a;
+      --accent-soft: #f5f5f5;
+      --green: #22c55e;
+      --red: #ef4444;
+      --amber: #f59e0b;
+      --radius-lg: 20px;
+      --radius-md: 14px;
+      --radius-sm: 10px;
+      --radius-pill: 100px;
+      --shadow-sm: 0 1px 3px rgba(0,0,0,0.06);
+      --shadow-md: 0 4px 16px rgba(0,0,0,0.08);
+      --shadow-lg: 0 8px 32px rgba(0,0,0,0.12);
+      --shadow-sheet: 0 -4px 30px rgba(0,0,0,0.08);
+      --safe-bottom: max(16px, env(safe-area-inset-bottom));
+      --safe-top: max(12px, env(safe-area-inset-top));
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+    html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
     body {
       font-family: 'Inter', system-ui, -apple-system, sans-serif;
-      background: #fff; color: #111;
+      background: var(--bg); color: var(--fg);
+      -webkit-font-smoothing: antialiased;
     }
 
+    /* ── Map ── */
     #map { position: absolute; inset: 0; z-index: 0; }
+    .leaflet-control-attribution { display: none !important; }
+    .leaflet-control-zoom { border: none !important; box-shadow: var(--shadow-md) !important; border-radius: var(--radius-sm) !important; overflow: hidden; }
+    .leaflet-control-zoom a { width: 36px !important; height: 36px !important; line-height: 36px !important; font-size: 16px !important; color: var(--fg) !important; background: var(--card-solid) !important; border: none !important; }
 
+    /* ── Top Bar ── */
     .top-bar {
       position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
-      padding: max(12px, env(safe-area-inset-top)) 16px 0;
+      padding: var(--safe-top) 16px 0;
     }
+    .top-header {
+      display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
+      padding: 0 4px;
+    }
+    .brand {
+      display: flex; align-items: center; gap: 8px;
+    }
+    .brand-logo {
+      width: 32px; height: 32px; border-radius: 10px; background: var(--accent);
+      display: flex; align-items: center; justify-content: center;
+      color: #fff; font-weight: 800; font-size: 15px;
+      box-shadow: var(--shadow-sm);
+    }
+    .brand-name { font-size: 18px; font-weight: 800; color: var(--fg); letter-spacing: -0.02em; }
+    .brand-tagline { font-size: 10px; color: var(--fg3); font-weight: 500; letter-spacing: 0.02em; margin-top: -1px; }
+
+    .status-pill {
+      margin-left: auto; display: flex; align-items: center; gap: 5px;
+      padding: 5px 10px; border-radius: var(--radius-pill);
+      background: var(--accent-soft); font-size: 11px; font-weight: 600;
+      color: var(--fg2); border: 1px solid var(--border);
+    }
+    .status-dot {
+      width: 6px; height: 6px; border-radius: 50%; background: var(--green);
+      animation: pulse-dot 2s infinite;
+    }
+    @keyframes pulse-dot { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
     .search-card {
-      background: #fff; border-radius: 28px;
-      box-shadow: 0 2px 12px rgba(0,0,0,0.1), 0 0 0 1px rgba(0,0,0,0.04);
-      display: flex; align-items: center; padding: 0 16px; height: 50px;
-      gap: 10px; transition: box-shadow 0.2s;
+      background: var(--card); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+      border-radius: var(--radius-pill);
+      box-shadow: var(--shadow-md), 0 0 0 1px var(--border);
+      display: flex; align-items: center; padding: 0 16px; height: 48px;
+      gap: 10px; transition: box-shadow 0.2s, transform 0.15s;
     }
-    .search-card:focus-within { box-shadow: 0 4px 20px rgba(0,0,0,0.14), 0 0 0 2px #111; }
-    .search-icon { color: #999; font-size: 16px; flex-shrink: 0; }
-    .search-icon svg { width: 18px; height: 18px; stroke: #999; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+    .search-card:focus-within {
+      box-shadow: var(--shadow-lg), 0 0 0 2px var(--accent);
+      transform: translateY(-1px);
+    }
+    .search-icon svg { width: 18px; height: 18px; stroke: var(--fg3); fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .search-card input {
       border: none; outline: none; flex: 1; font-size: 15px;
-      font-family: inherit; color: #111; background: transparent; min-width: 0;
+      font-family: inherit; color: var(--fg); background: transparent; min-width: 0;
     }
-    .search-card input::placeholder { color: #aaa; }
+    .search-card input::placeholder { color: #bbb; }
     .search-clear {
       display: none; background: none; border: none; cursor: pointer;
-      font-size: 18px; color: #999; padding: 4px;
+      font-size: 18px; color: var(--fg3); padding: 4px;
     }
     .search-results {
-      display: none; background: #fff; border-radius: 14px; margin-top: 8px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.1);
-      max-height: 240px; overflow-y: auto;
+      display: none; background: var(--card-solid); border-radius: var(--radius-md); margin-top: 8px;
+      box-shadow: var(--shadow-lg); max-height: 240px; overflow-y: auto;
+      border: 1px solid var(--border);
     }
     .search-result {
       padding: 12px 16px; cursor: pointer; font-size: 14px;
-      color: #333; border-bottom: 1px solid #f3f3f3;
+      color: var(--fg2); border-bottom: 1px solid rgba(0,0,0,0.04);
       display: flex; align-items: flex-start; gap: 10px;
+      transition: background 0.1s;
     }
     .search-result:last-child { border-bottom: none; }
-    .search-result:active { background: #f5f5f5; }
-    .search-result .sr-icon { color: #999; font-size: 14px; margin-top: 1px; flex-shrink: 0; }
-    .search-result .sr-name { font-weight: 500; }
-    .search-result .sr-addr { font-size: 12px; color: #999; margin-top: 2px; }
-    .search-status {
-      padding: 14px 16px; font-size: 14px; color: #666;
-      border-bottom: 1px solid #f3f3f3;
+    .search-result:active { background: var(--accent-soft); }
+    .search-result .sr-icon { color: var(--fg3); font-size: 14px; margin-top: 1px; flex-shrink: 0; }
+    .search-result .sr-name { font-weight: 600; color: var(--fg); }
+    .search-result .sr-addr { font-size: 12px; color: var(--fg3); margin-top: 2px; }
+    .search-status { padding: 14px 16px; font-size: 14px; color: var(--fg3); }
+
+    .city-bar { display: flex; gap: 6px; margin-top: 8px; padding: 0 2px; }
+    .city-pill {
+      flex: 1; padding: 7px 0; border-radius: var(--radius-pill); border: 1.5px solid rgba(0,0,0,0.08);
+      background: var(--card); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+      font-size: 12px; font-weight: 600; color: var(--fg3);
+      cursor: pointer; text-align: center; font-family: inherit;
+      transition: all 0.2s; box-shadow: var(--shadow-sm);
+    }
+    .city-pill:active { transform: scale(0.96); }
+    .city-pill.active {
+      background: var(--accent); color: #fff; border-color: var(--accent);
+      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
     }
 
+    /* ── Bottom Sheet ── */
     .bottom-sheet {
       position: absolute; bottom: 0; left: 0; right: 0; z-index: 1000;
-      background: #fff; border-radius: 18px 18px 0 0;
-      box-shadow: 0 -2px 20px rgba(0,0,0,0.06);
-      padding: 0 20px;
-      padding-bottom: max(20px, env(safe-area-inset-bottom));
-      transition: transform 0.3s ease;
-      max-height: 60vh; overflow-y: auto;
+      background: var(--card-solid); border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+      box-shadow: var(--shadow-sheet);
+      padding: 0 20px; padding-bottom: var(--safe-bottom);
+      transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
+      max-height: 65vh; overflow-y: auto;
       -webkit-overflow-scrolling: touch;
     }
     .sheet-handle {
-      width: 32px; height: 4px; border-radius: 2px;
-      background: #ddd; margin: 10px auto 0;
+      width: 36px; height: 4px; border-radius: 2px;
+      background: #e0e0e0; margin: 10px auto 0;
     }
-    .sheet-content { padding: 14px 0 4px; }
+    .sheet-content { padding: 16px 0 4px; }
 
+    /* ── Location rows ── */
     .loc-row {
       display: flex; align-items: center; gap: 12px;
-      padding: 10px 0; border-bottom: 1px solid #f3f3f3;
+      padding: 12px 0; border-bottom: 1px solid rgba(0,0,0,0.04);
     }
     .loc-row:last-child { border-bottom: none; }
     .loc-dot {
       width: 10px; height: 10px; border-radius: 50%;
-      flex-shrink: 0; border: 2px solid;
+      flex-shrink: 0; border: 2.5px solid;
     }
-    .loc-dot.origin { border-color: #111; background: #e5e5e5; }
-    .loc-dot.dest { border-color: #555; background: #f0f0f0; }
-    .loc-label { font-size: 14px; color: #333; flex: 1; min-width: 0; }
-    .loc-label.placeholder { color: #aaa; }
+    .loc-dot.origin { border-color: var(--fg); background: #e5e5e5; }
+    .loc-dot.dest { border-color: var(--fg2); background: #f0f0f0; }
+    .loc-label { font-size: 14px; color: var(--fg2); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .loc-label.placeholder { color: #bbb; }
     .loc-change {
-      font-size: 13px; color: #111; font-weight: 500; cursor: pointer;
-      background: none; border: none; padding: 4px 8px; flex-shrink: 0;
-      text-decoration: underline; text-underline-offset: 2px;
+      font-size: 12px; color: var(--fg); font-weight: 600; cursor: pointer;
+      background: var(--accent-soft); border: none; padding: 6px 12px; flex-shrink: 0;
+      border-radius: var(--radius-pill); transition: background 0.15s;
     }
+    .loc-change:active { background: #e5e5e5; }
 
-    .route-info {
-      background: #fafafa; border-radius: 10px; padding: 12px 14px;
-      margin: 10px 0; font-size: 13px; color: #666; line-height: 1.6;
-      border: 1px solid #eee;
+    /* ── Info cards ── */
+    .info-card {
+      background: var(--accent-soft); border-radius: var(--radius-sm); padding: 14px 16px;
+      margin: 10px 0; font-size: 13px; color: var(--fg2); line-height: 1.6;
+      border: 1px solid var(--border);
     }
-    .route-info strong { color: #111; }
+    .info-card strong { color: var(--fg); }
+
+    .price-row {
+      display: flex; align-items: baseline; gap: 8px; margin-top: 8px;
+    }
+    .price-amount { font-size: 22px; font-weight: 800; color: var(--fg); letter-spacing: -0.02em; }
+    .price-detail { font-size: 11px; color: var(--fg3); }
 
     .eta-card {
-      background: #fafafa; border: 1px solid #eee;
-      border-radius: 10px; padding: 16px; margin: 10px 0; text-align: center;
+      background: var(--accent-soft); border: 1px solid var(--border);
+      border-radius: var(--radius-md); padding: 20px; margin: 10px 0; text-align: center;
     }
     .eta-time {
-      font-size: 26px; font-weight: 800; color: #111;
-      letter-spacing: -0.02em;
+      font-size: 32px; font-weight: 900; color: var(--fg);
+      letter-spacing: -0.03em;
     }
-    .eta-label { font-size: 12px; color: #888; margin-top: 4px; }
+    .eta-label { font-size: 12px; color: var(--fg3); margin-top: 4px; font-weight: 500; }
 
+    .safety-badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 4px 10px; border-radius: var(--radius-pill);
+      background: rgba(34,197,94,0.1); color: #16a34a;
+      font-size: 11px; font-weight: 600; margin-top: 6px;
+    }
+    .safety-badge svg { width: 12px; height: 12px; fill: currentColor; }
+
+    /* ── Buttons ── */
     .btn {
-      display: block; width: 100%; padding: 14px; margin: 6px 0;
-      font-size: 15px; font-weight: 600; border: none; border-radius: 12px;
+      display: block; width: 100%; padding: 15px; margin: 6px 0;
+      font-size: 15px; font-weight: 600; border: none; border-radius: var(--radius-md);
       cursor: pointer; font-family: inherit; transition: all 0.15s;
-      min-height: 48px; -webkit-tap-highlight-color: transparent;
+      min-height: 50px; position: relative; overflow: hidden;
     }
     .btn:disabled { opacity: 0.4; cursor: not-allowed; }
     .btn:active:not(:disabled) { transform: scale(0.98); }
-    .btn-primary { background: #111; color: #fff; }
-    .btn-go { background: #111; color: #fff; font-size: 16px; }
-    .btn-danger { background: #dc2626; color: #fff; }
-    .btn-outline {
-      background: #fff; color: #666;
-      border: 1px solid #ddd; font-weight: 500;
+    .btn-primary { background: var(--accent); color: #fff; }
+    .btn-go {
+      background: var(--accent); color: #fff; font-size: 16px; font-weight: 700;
+      letter-spacing: -0.01em;
     }
+    .btn-danger {
+      background: var(--red); color: #fff; font-size: 16px; font-weight: 700;
+      letter-spacing: 0.5px; text-transform: uppercase;
+      animation: pulse-danger 2s ease-in-out infinite;
+    }
+    @keyframes pulse-danger {
+      0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.4); }
+      50% { box-shadow: 0 0 0 10px rgba(239,68,68,0); }
+    }
+    .btn-outline {
+      background: transparent; color: var(--fg3);
+      border: 1px solid var(--border); font-weight: 500;
+    }
+    .btn-outline:active { background: var(--accent-soft); }
 
+    /* ── Drone status card ── */
     .drone-card {
       display: flex; align-items: center; gap: 12px;
-      padding: 12px 14px; margin: 8px 0;
-      background: #fafafa; border: 1px solid #eee;
-      border-radius: 10px;
+      padding: 14px 16px; margin: 8px 0;
+      background: var(--accent-soft); border: 1px solid var(--border);
+      border-radius: var(--radius-md); transition: all 0.3s;
     }
     .drone-card .pulse-dot {
-      width: 8px; height: 8px; border-radius: 50%;
-      background: #111; flex-shrink: 0;
-      animation: pulse 1.5s infinite;
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--green); flex-shrink: 0;
+      animation: dronePulse 1.2s infinite;
+      box-shadow: 0 0 0 0 rgba(34,197,94,0.5);
     }
-    .drone-card .drone-text { flex: 1; font-size: 13px; color: #111; font-weight: 500; }
-    .drone-card .drone-sub { font-size: 12px; color: #888; margin-top: 2px; font-weight: 400; }
+    @keyframes dronePulse {
+      0%,100% { box-shadow: 0 0 0 0 rgba(34,197,94,0.4); }
+      50% { box-shadow: 0 0 0 6px rgba(34,197,94,0); }
+    }
+    .drone-card .drone-text { flex: 1; font-size: 14px; color: var(--fg); font-weight: 600; }
+    .drone-card .drone-sub { font-size: 12px; color: var(--fg3); margin-top: 2px; font-weight: 400; }
     .drone-card .live-badge {
-      font-size: 10px; font-weight: 600; text-transform: uppercase;
-      letter-spacing: 0.06em; color: #111; background: #eee;
-      padding: 2px 7px; border-radius: 4px; display: none;
+      font-size: 10px; font-weight: 700; text-transform: uppercase;
+      letter-spacing: 0.08em; color: #fff; background: var(--green);
+      padding: 3px 8px; border-radius: var(--radius-pill); display: none;
     }
-    @keyframes pulse { 50% { opacity: 0.4; } }
-    @keyframes dronePulse { 0%, 100% { opacity: 1; box-shadow: 0 0 0 0 rgba(34,197,94,0.5); } 50% { opacity: 0.7; box-shadow: 0 0 0 5px rgba(34,197,94,0); } }
 
+    /* ── Mission timeline ── */
+    .mission-timeline {
+      display: flex; align-items: center; gap: 0; margin: 12px 0 8px;
+      background: var(--accent-soft); border-radius: var(--radius-sm); padding: 10px 14px;
+      border: 1px solid var(--border);
+    }
+    .tl-phase { flex: 1; text-align: center; }
+    .tl-dot {
+      width: 12px; height: 12px; border-radius: 50%; background: #e0e0e0;
+      margin: 0 auto 4px; border: 2px solid #ccc; transition: all 0.3s;
+    }
+    .tl-dot.active { background: var(--accent); border-color: var(--accent); animation: tl-pulse 1.5s infinite; }
+    .tl-dot.done { background: var(--accent); border-color: var(--accent); }
+    .tl-label { font-size: 10px; color: var(--fg3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .tl-label.active { color: var(--fg); }
+    .tl-label.done { color: var(--fg); }
+    .tl-line { width: 100%; height: 2px; background: #e0e0e0; flex: 0 0 auto; min-width: 20px; transition: background 0.3s; }
+    .tl-line.done { background: var(--accent); }
+    @keyframes tl-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(0,0,0,0.3); } 50% { box-shadow: 0 0 0 6px rgba(0,0,0,0); } }
+    .tl-speed { font-size: 10px; color: var(--fg3); margin-top: 2px; }
+    .tl-speed.active { color: var(--fg); font-weight: 700; }
+
+    /* ── Emergency ── */
     .distress-box {
-      background: #fff; border: 1px solid #dc2626;
-      border-radius: 10px; padding: 20px; text-align: center;
+      background: #fff; border: 2px solid var(--red);
+      border-radius: var(--radius-md); padding: 24px; text-align: center;
     }
-    .distress-box p { font-size: 13px; color: #666; margin-bottom: 10px; }
-    .countdown { font-size: 64px; font-weight: 800; color: #dc2626; line-height: 1; }
-    .btn-danger { font-size: 18px; padding: 16px; letter-spacing: 1px; text-transform: uppercase; animation: pulse-danger 2s ease-in-out infinite; }
-    @keyframes pulse-danger { 0%,100% { box-shadow: 0 0 0 0 rgba(220,38,38,0.4); } 50% { box-shadow: 0 0 0 8px rgba(220,38,38,0); } }
+    .distress-box p { font-size: 14px; color: var(--fg2); margin-bottom: 12px; font-weight: 500; }
+    .countdown { font-size: 72px; font-weight: 900; color: var(--red); line-height: 1; letter-spacing: -0.03em; }
 
+    /* ── FAB + Chat ── */
     .locate-btn {
       position: absolute; bottom: 0; right: 16px; z-index: 999;
-      width: 42px; height: 42px; border-radius: 50%;
-      background: #fff; border: none; cursor: pointer;
-      box-shadow: 0 2px 8px rgba(0,0,0,0.12);
+      width: 44px; height: 44px; border-radius: 50%;
+      background: var(--card-solid); border: none; cursor: pointer;
+      box-shadow: var(--shadow-md);
       display: flex; align-items: center; justify-content: center;
-      transition: transform 0.3s;
+      transition: transform 0.15s;
     }
-    .locate-btn svg { width: 20px; height: 20px; stroke: #111; fill: none; stroke-width: 2; }
-    .locate-btn:active { transform: scale(0.92); }
-
-    .leaflet-control-attribution { display: none !important; }
+    .locate-btn svg { width: 20px; height: 20px; stroke: var(--fg); fill: none; stroke-width: 2; }
+    .locate-btn:active { transform: scale(0.9); }
 
     .louise-fab {
       position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 320px); right: 16px;
-      z-index: 1200; width: 48px; height: 48px; border-radius: 50%;
-      background: #111; border: none; cursor: pointer;
+      z-index: 1200; width: 50px; height: 50px; border-radius: 50%;
+      background: var(--accent); border: none; cursor: pointer;
       display: flex; align-items: center; justify-content: center;
-      box-shadow: 0 2px 10px rgba(0,0,0,0.2); transition: transform 0.15s;
+      box-shadow: 0 4px 14px rgba(0,0,0,0.25); transition: transform 0.15s;
       color: #fff; font-weight: 800; font-size: 18px; font-family: inherit;
     }
-    .louise-fab:active { transform: scale(0.9); }
+    .louise-fab:active { transform: scale(0.88); }
     .louise-chat {
-      position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 376px); right: 16px;
-      z-index: 1200; width: min(340px, calc(100vw - 32px)); background: #fff;
-      border-radius: 16px; box-shadow: 0 4px 24px rgba(0,0,0,0.15);
-      display: none; flex-direction: column; max-height: 380px;
-      border: 1px solid rgba(0,0,0,0.08); overflow: hidden;
+      position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 380px); right: 16px;
+      z-index: 1200; width: min(360px, calc(100vw - 32px)); background: var(--card-solid);
+      border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+      display: none; flex-direction: column; max-height: 400px;
+      border: 1px solid var(--border); overflow: hidden;
     }
     .louise-chat.open { display: flex; }
     .louise-chat-header {
-      padding: 12px 16px; border-bottom: 1px solid #eee;
+      padding: 14px 16px; border-bottom: 1px solid var(--border);
       font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 8px;
     }
-    .louise-chat-header .close-chat { margin-left: auto; background: none; border: none; cursor: pointer; font-size: 18px; color: #999; }
-    .louise-chat-body { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 8px; }
-    .chat-msg { max-width: 85%; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.5; word-break: break-word; }
-    .chat-msg.user { align-self: flex-end; background: #111; color: #fff; border-bottom-right-radius: 4px; }
-    .chat-msg.louise { align-self: flex-start; background: #f3f3f3; color: #111; border-bottom-left-radius: 4px; }
-    .chat-msg.tools { align-self: flex-start; background: none; color: #999; font-size: 11px; padding: 2px 0; font-style: italic; }
-    .chat-msg.thinking { align-self: flex-start; background: none; color: #999; font-size: 12px; padding: 4px 0; }
+    .louise-chat-header .close-chat { margin-left: auto; background: none; border: none; cursor: pointer; font-size: 20px; color: var(--fg3); padding: 4px; }
+    .louise-chat-body { flex: 1; overflow-y: auto; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+    .chat-msg { max-width: 85%; padding: 10px 14px; border-radius: 16px; font-size: 13px; line-height: 1.5; word-break: break-word; }
+    .chat-msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+    .chat-msg.louise { align-self: flex-start; background: var(--accent-soft); color: var(--fg); border-bottom-left-radius: 4px; }
+    .chat-msg.tools { align-self: flex-start; background: none; color: var(--fg3); font-size: 11px; padding: 2px 0; font-style: italic; }
+    .chat-msg.thinking { align-self: flex-start; background: none; color: var(--fg3); font-size: 12px; padding: 4px 0; }
     .chat-msg.thinking::after { content: ''; animation: dots 1.2s steps(4,end) infinite; }
     @keyframes dots { 0% { content: ''; } 25% { content: '.'; } 50% { content: '..'; } 75% { content: '...'; } }
 
-    .mission-timeline {
-      display: flex; align-items: center; gap: 0; margin: 12px 0 8px;
-      background: #f5f5f5; border-radius: 8px; padding: 8px 12px;
-    }
-    .tl-phase {
-      flex: 1; text-align: center; position: relative;
-    }
-    .tl-dot {
-      width: 12px; height: 12px; border-radius: 50%; background: #ddd;
-      margin: 0 auto 4px; border: 2px solid #ccc; transition: all 0.3s;
-    }
-    .tl-dot.active { background: #111; border-color: #111; animation: tl-pulse 1.5s infinite; }
-    .tl-dot.done { background: #111; border-color: #111; }
-    .tl-label { font-size: 10px; color: #999; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
-    .tl-label.active { color: #111; }
-    .tl-label.done { color: #111; }
-    .tl-line {
-      width: 100%; height: 2px; background: #ddd; flex: 0 0 auto; min-width: 20px;
-      transition: background 0.3s;
-    }
-    .tl-line.done { background: #111; }
-    @keyframes tl-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(0,0,0,0.3); } 50% { box-shadow: 0 0 0 6px rgba(0,0,0,0); } }
-    .tl-speed { font-size: 10px; color: #666; margin-top: 2px; }
-    .tl-speed.active { color: #111; font-weight: 700; }
-
     .louise-chat-input {
-      display: flex; padding: 8px 12px; border-top: 1px solid #eee; gap: 8px;
+      display: flex; padding: 10px 12px; border-top: 1px solid var(--border); gap: 8px;
     }
     .louise-chat-input input {
-      flex: 1; border: 1px solid #ddd; border-radius: 20px; padding: 8px 14px;
-      font-size: 13px; font-family: inherit; outline: none;
+      flex: 1; border: 1px solid var(--border); border-radius: var(--radius-pill); padding: 9px 16px;
+      font-size: 13px; font-family: inherit; outline: none; background: var(--accent-soft);
     }
-    .louise-chat-input input:focus { border-color: #111; }
+    .louise-chat-input input:focus { border-color: var(--accent); background: #fff; }
     .louise-chat-input button {
-      background: #111; color: #fff; border: none; border-radius: 50%;
-      width: 34px; height: 34px; cursor: pointer; font-size: 14px;
+      background: var(--accent); color: #fff; border: none; border-radius: 50%;
+      width: 36px; height: 36px; cursor: pointer; font-size: 15px;
       display: flex; align-items: center; justify-content: center;
+      flex-shrink: 0; transition: transform 0.15s;
     }
+    .louise-chat-input button:active { transform: scale(0.9); }
+
+    /* ── Idle state extras ── */
+    .feature-grid {
+      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 6px;
+    }
+    .feature-item {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 12px; border-radius: var(--radius-sm);
+      background: var(--accent-soft); border: 1px solid var(--border);
+      font-size: 12px; font-weight: 500; color: var(--fg2);
+    }
+    .feature-item svg { width: 16px; height: 16px; flex-shrink: 0; stroke: var(--fg3); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+
+    @keyframes pulse { 50% { opacity: 0.4; } }
+
+    /* Smooth transitions for all states */
+    #stateIdle, #stateRoute, #statePlanned, #stateActive, #stateDistress {
+      animation: fadeIn 0.25s ease;
+    }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
   </style>
 </head>
 <body>
@@ -255,7 +383,7 @@
   <button class="louise-fab" id="louiseFab" title="Ask Louise">L</button>
   <div class="louise-chat" id="louiseChat">
     <div class="louise-chat-header">
-      <span style="width:22px;height:22px;border-radius:5px;background:#111;display:flex;align-items:center;justify-content:center;color:#fff;font-size:11px;font-weight:800">L</span>
+      <span style="width:24px;height:24px;border-radius:7px;background:var(--accent);display:flex;align-items:center;justify-content:center;color:#fff;font-size:12px;font-weight:800">L</span>
       Ask Louise
       <button class="close-chat" id="closeLouise">&times;</button>
     </div>
@@ -269,36 +397,70 @@
   </div>
 
   <div class="top-bar" id="topBar">
+    <div class="top-header">
+      <div class="brand">
+        <div class="brand-logo">L</div>
+        <div>
+          <div class="brand-name">Louise</div>
+          <div class="brand-tagline">Walk safe. Walk home.</div>
+        </div>
+      </div>
+      <div class="status-pill" id="statusPill">
+        <span class="status-dot"></span>
+        <span id="statusText">Online</span>
+      </div>
+    </div>
     <div class="search-card" id="searchCard">
       <span class="search-icon"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg></span>
-      <input type="text" id="searchInput" placeholder="From: search start address (or tap map)" autocomplete="off" />
+      <input type="text" id="searchInput" placeholder="Where are you going?" autocomplete="off" />
       <button class="search-clear" id="searchClear">&times;</button>
     </div>
+    <div class="city-bar" id="cityBar"></div>
     <div class="search-results" id="searchResults"></div>
   </div>
 
   <div class="bottom-sheet" id="sheet">
     <div class="sheet-handle"></div>
     <div class="sheet-content" id="sheetContent">
+
+      <!-- IDLE STATE -->
       <div id="stateIdle">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
-          <div style="width:26px;height:26px;border-radius:6px;background:#111;display:flex;align-items:center;justify-content:center;font-size:13px;color:#fff;font-weight:700">L</div>
-          <span style="font-size:16px;font-weight:700;color:#111">Louise</span>
-        </div>
-        <p style="font-size:13px;color:#888;line-height:1.5;margin-bottom:8px" id="idleHint">
-          Set <strong style="color:#111">From</strong> and <strong style="color:#111">To</strong>, then request a drone escort.
-        </p>
         <div class="loc-row">
           <div class="loc-dot origin"></div>
-          <span class="loc-label placeholder" id="originLabel">From: not set</span>
-          <button type="button" class="loc-change" id="btnShareLocation">Share location</button>
+          <span class="loc-label placeholder" id="originLabel">Tap map or search for start</span>
+          <button type="button" class="loc-change" id="btnShareLocation">
+            <svg viewBox="0 0 24 24" width="12" height="12" style="vertical-align:-1px;stroke:currentColor;fill:none;stroke-width:2;margin-right:3px"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>
+            Use GPS
+          </button>
         </div>
-        <div class="loc-row" style="margin-top:2px">
+        <div class="loc-row">
           <div class="loc-dot dest"></div>
-          <span class="loc-label placeholder" id="destLabelIdle">To: search above or tap map</span>
+          <span class="loc-label placeholder" id="destLabelIdle">Search or tap map for destination</span>
+        </div>
+        <p style="font-size:12px;color:var(--fg3);line-height:1.5;margin:10px 0 4px" id="idleHint">
+          Set your start and destination, then request a drone escort for your walk.
+        </p>
+        <div class="feature-grid">
+          <div class="feature-item">
+            <svg viewBox="0 0 24 24"><path d="M12 22s-8-4.5-8-11.8A8 8 0 0 1 12 2a8 8 0 0 1 8 8.2c0 7.3-8 11.8-8 11.8z"/><circle cx="12" cy="10" r="3"/></svg>
+            Live GPS tracking
+          </div>
+          <div class="feature-item">
+            <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+            AI safety scan
+          </div>
+          <div class="feature-item">
+            <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>
+            Verified routes
+          </div>
+          <div class="feature-item">
+            <svg viewBox="0 0 24 24"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M12 6v6l4 2"/></svg>
+            24/7 available
+          </div>
         </div>
       </div>
 
+      <!-- ROUTE STATE -->
       <div id="stateRoute" style="display:none">
         <div class="loc-row">
           <div class="loc-dot origin"></div>
@@ -310,20 +472,26 @@
           <span class="loc-label" id="routeDestLabel">Destination</span>
           <button class="loc-change" id="btnChangeDest">Change</button>
         </div>
-        <div class="route-info" id="routeInfo"></div>
+        <div class="info-card" id="routeInfo"></div>
         <button class="btn btn-primary" id="btnRequest">Request drone escort</button>
       </div>
 
+      <!-- PLANNED STATE -->
       <div id="statePlanned" style="display:none">
         <div class="eta-card">
           <div class="eta-time" id="etaTime">--</div>
           <div class="eta-label" id="etaLabel">Drone arrives in</div>
+          <span class="safety-badge">
+            <svg viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+            AI-monitored escort
+          </span>
         </div>
-        <div class="route-info" id="plannedInfo" style="font-size:12px"></div>
+        <div class="info-card" id="plannedInfo" style="font-size:12px"></div>
         <button class="btn btn-go" id="btnGo">Start walking</button>
         <button class="btn btn-outline" id="btnCancelPlan">Cancel</button>
       </div>
 
+      <!-- ACTIVE STATE -->
       <div id="stateActive" style="display:none">
         <div class="drone-card" id="droneCard">
           <span class="pulse-dot"></span>
@@ -343,25 +511,26 @@
           <div class="tl-phase" id="tlEscort">
             <div class="tl-dot" id="tlDotEscort"></div>
             <div class="tl-label" id="tlLabelEscort">Escort</div>
-            <div class="tl-speed" id="tlSpeedEscort">4 m/s</div>
+            <div class="tl-speed" id="tlSpeedEscort">12 m/s</div>
           </div>
           <div class="tl-line" id="tlLine2"></div>
           <div class="tl-phase" id="tlReturn">
             <div class="tl-dot" id="tlDotReturn"></div>
             <div class="tl-label" id="tlLabelReturn">Return</div>
-            <div class="tl-speed" id="tlSpeedReturn">instant</div>
+            <div class="tl-speed" id="tlSpeedReturn"></div>
           </div>
         </div>
         <button class="btn btn-danger" id="btnDistress">I need help</button>
-        <button class="btn btn-primary" id="btnArrived">I've arrived — send drone home</button>
-        <button class="btn btn-outline" id="btnCancel">I'm safe — cancel</button>
+        <button class="btn btn-primary" id="btnArrived">I've arrived safely</button>
+        <button class="btn btn-outline" id="btnCancel">Cancel escort</button>
       </div>
 
+      <!-- DISTRESS STATE -->
       <div id="stateDistress" style="display:none">
         <div class="distress-box">
           <p><strong>EMERGENCY ALERT</strong><br>Authorities will be notified in:</p>
           <div class="countdown" id="countdown">15</div>
-          <button class="btn" style="background:#111;color:#fff;margin-top:12px" id="btnDismiss">I'm safe — cancel alert</button>
+          <button class="btn" style="background:var(--accent);color:#fff;margin-top:14px" id="btnDismiss">I'm safe — cancel alert</button>
         </div>
       </div>
     </div>
@@ -370,26 +539,74 @@
   <script>
     (function loadMapThenApp() {
       function run() {
-    const HUB = [48.8606, 2.3376];
-    const PARIS = [48.8566, 2.3522];
+    let CITIES = {
+      paris:  { name: 'Paris',  hub: {lat:48.8606,lng:2.3376,label:'Louise Drone Centre — Louvre, Paris'}, center:{lat:48.8566,lng:2.3522}, bounds:{lat_min:48.80,lat_max:48.92,lng_min:2.22,lng_max:2.47}, country:'fr', viewbox:'2.2,48.92,2.5,48.80', zoom:14 },
+      dublin: { name: 'Dublin', hub: {lat:53.3441,lng:-6.2675,label:'Louise Drone Centre — Trinity College, Dublin'}, center:{lat:53.3498,lng:-6.2603}, bounds:{lat_min:53.28,lat_max:53.42,lng_min:-6.40,lng_max:-6.10}, country:'ie', viewbox:'-6.40,53.42,-6.10,53.28', zoom:14 },
+      london: { name: 'London', hub: {lat:51.5014,lng:-0.1419,label:'Louise Drone Centre — Buckingham Palace, London'}, center:{lat:51.5074,lng:-0.1278}, bounds:{lat_min:51.40,lat_max:51.60,lng_min:-0.30,lng_max:0.10}, country:'gb', viewbox:'-0.30,51.60,0.10,51.40', zoom:13 },
+    };
+    let currentCity = 'paris';
 
-    const map = L.map('map', { zoomControl: false }).setView(PARIS, 14);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    const map = L.map('map', { zoomControl: false }).setView([CITIES.paris.center.lat, CITIES.paris.center.lng], 14);
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
       maxZoom: 19
     }).addTo(map);
     L.control.zoom({ position: 'topright' }).addTo(map);
 
     const hubIcon = L.divIcon({
       className: '',
-      html: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V10.5z" fill="#111" stroke="#fff" stroke-width="1.5"/><rect x="9" y="14" width="6" height="7" rx="0.5" fill="#fff"/></svg>`,
+      html: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V10.5z" fill="#fff" stroke="#000" stroke-width="1.5"/><rect x="9" y="14" width="6" height="7" rx="0.5" fill="#000"/></svg>`,
       iconSize: [22, 22], iconAnchor: [11, 19],
     });
-    L.marker(HUB, { icon: hubIcon }).addTo(map).bindPopup('<strong>Louise Drone Centre</strong><br>Louvre, Paris');
+    let hubMarker = L.marker([CITIES.paris.hub.lat, CITIES.paris.hub.lng], { icon: hubIcon }).addTo(map)
+      .bindPopup('<strong>Louise Drone Centre</strong><br>Louvre, Paris');
+
+    const cityBar = document.getElementById('cityBar');
+    function buildCityPills() {
+      cityBar.innerHTML = '';
+      Object.entries(CITIES).forEach(([key, city]) => {
+        const pill = document.createElement('button');
+        pill.className = 'city-pill' + (key === currentCity ? ' active' : '');
+        pill.textContent = city.name;
+        pill.onclick = () => switchCity(key);
+        cityBar.appendChild(pill);
+      });
+    }
+    buildCityPills();
+
+    function switchCity(key) {
+      if (key === currentCity) return;
+      currentCity = key;
+      const city = CITIES[key];
+      map.setView([city.center.lat, city.center.lng], city.zoom || 14);
+      if (hubMarker) map.removeLayer(hubMarker);
+      hubMarker = L.marker([city.hub.lat, city.hub.lng], { icon: hubIcon }).addTo(map)
+        .bindPopup(`<strong>${city.hub.label || 'Louise Drone Centre'}</strong>`);
+      hubPosition = city.hub;
+      origin = null; dest = null; destDisplayName = '';
+      if (originMarker) { map.removeLayer(originMarker); originMarker = null; }
+      if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
+      if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+      if (originConnector) { map.removeLayer(originConnector); originConnector = null; }
+      if (destConnector) { map.removeLayer(destConnector); destConnector = null; }
+      routeCoords = null;
+      searchInput.value = '';
+      document.getElementById('originLabel').textContent = 'Tap map or search for start';
+      document.getElementById('originLabel').className = 'loc-label placeholder';
+      document.getElementById('destLabelIdle').textContent = 'Search or tap map for destination';
+      document.getElementById('destLabelIdle').className = 'loc-label placeholder';
+      showState('stateIdle');
+      buildCityPills();
+    }
+
+    fetch('/api/config').then(r => r.json()).then(cfg => {
+      if (cfg.cities) { CITIES = cfg.cities; buildCityPills(); }
+    }).catch(() => {});
 
     let origin = null, dest = null;
     let destDisplayName = '';
     let originMarker = null, destMarker = null;
     let routeLayer = null, approachLayer = null, escortLayer = null, returnLayer = null;
+    let originConnector = null, destConnector = null;
     let droneMarker = null, ws = null;
     let routeCoords = null;
     let missionStats = null;
@@ -410,7 +627,7 @@
       const sheet = document.getElementById('sheet');
       const btn = document.getElementById('btnLocate');
       const h = sheet.offsetHeight;
-      btn.style.bottom = (h + 12) + 'px';
+      btn.style.bottom = (h + 14) + 'px';
     }
     window.addEventListener('resize', repositionLocateBtn);
     setTimeout(repositionLocateBtn, 100);
@@ -418,15 +635,13 @@
     function updateIdleHint() {
       const hint = document.getElementById('idleHint');
       if (!hint) return;
-      if (origin && dest) hint.innerHTML = 'From and To set. Request drone escort below.';
-      else if (origin) hint.innerHTML = 'From set. Now set <strong style="color:#111">To</strong>: search above or tap the map.';
-      else hint.innerHTML = 'Set <strong style="color:#111">From</strong> and <strong style="color:#111">To</strong>, then request a drone escort.';
+      if (origin && dest) hint.textContent = 'Both set. Request your drone escort below.';
+      else if (origin) hint.textContent = 'Start set. Now tap the map or search for your destination.';
+      else hint.textContent = 'Set your start and destination, then request a drone escort for your walk.';
     }
 
     function updateSearchPlaceholder() {
-      searchInput.placeholder = origin
-        ? 'To: where are you going? (search or tap map)'
-        : 'From: search start address (or tap map)';
+      searchInput.placeholder = origin ? 'Where are you going?' : 'Where are you starting from?';
     }
 
     const _geocodeCache = new Map();
@@ -461,7 +676,7 @@
           updateSearchPlaceholder();
         },
         () => {
-          lbl.textContent = 'From: not set';
+          lbl.textContent = 'Tap map or search for start';
           lbl.classList.add('placeholder');
           updateIdleHint();
         },
@@ -477,7 +692,7 @@
       originMarker = L.marker(latlng, {
         icon: L.divIcon({
           className: '',
-          html: '<div style="width:14px;height:14px;background:#111;border:3px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.2)"></div>',
+          html: '<div style="width:14px;height:14px;background:#fff;border:3px solid #000;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>',
           iconSize: [14, 14], iconAnchor: [7, 7],
         }),
         zIndexOffset: 500,
@@ -490,7 +705,7 @@
       destMarker = L.marker(latlng, {
         icon: L.divIcon({
           className: '',
-          html: '<div style="width:12px;height:12px;background:#555;border:3px solid #fff;border-radius:50%;box-shadow:0 1px 4px rgba(0,0,0,0.2)"></div>',
+          html: '<div style="width:12px;height:12px;background:#888;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.3)"></div>',
           iconSize: [12, 12], iconAnchor: [6, 6],
         }),
       }).addTo(map);
@@ -539,7 +754,9 @@
       searchResults.innerHTML = '<div class="search-status">Searching...</div>';
       searchResults.style.display = 'block';
       try {
-        const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&addressdetails=1&countrycodes=fr&viewbox=2.2,48.9,2.5,48.8&bounded=0`, {
+        const cc = CITIES[currentCity]?.country || 'fr';
+        const vb = CITIES[currentCity]?.viewbox || '2.2,48.9,2.5,48.8';
+        const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=1&addressdetails=1&countrycodes=${cc}&viewbox=${vb}&bounded=0`, {
           headers: { 'Accept': 'application/json', 'User-Agent': 'LouiseWalkHome/1.0' }
         });
         const results = await resp.json();
@@ -567,7 +784,9 @@
       searchResults.style.display = 'block';
       searchTimeout = setTimeout(async () => {
         try {
-          const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=6&addressdetails=1&countrycodes=fr&viewbox=2.2,48.9,2.5,48.8&bounded=0`, {
+          const cc2 = CITIES[currentCity]?.country || 'fr';
+          const vb2 = CITIES[currentCity]?.viewbox || '2.2,48.9,2.5,48.8';
+          const resp = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&format=json&limit=6&addressdetails=1&countrycodes=${cc2}&viewbox=${vb2}&bounded=0`, {
             headers: { 'Accept': 'application/json', 'User-Agent': 'LouiseWalkHome/1.0' }
           });
           const results = await resp.json();
@@ -641,12 +860,12 @@
       if (!origin || !dest) return;
       const routeInfoEl = document.getElementById('routeInfo');
       try {
-        routeInfoEl.innerHTML = '<span style="color:#888">Getting route...</span>';
+        routeInfoEl.innerHTML = '<span style="color:var(--fg3)">Getting route...</span>';
         showState('stateRoute');
         const resp = await fetch('/api/route', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ origin, destination: dest }),
+          body: JSON.stringify({ origin, destination: dest, city: currentCity }),
         });
         const data = await resp.json();
         if (!data.coords || data.coords.length < 2) {
@@ -658,7 +877,21 @@
         routeCoords = data.coords;
         const latlngs = data.coords.map(c => [c[1], c[0]]);
         if (routeLayer) map.removeLayer(routeLayer);
-        routeLayer = L.polyline(latlngs, { color: '#111', weight: 4, opacity: 0.6 }).addTo(map);
+        if (originConnector) { map.removeLayer(originConnector); originConnector = null; }
+        if (destConnector) { map.removeLayer(destConnector); destConnector = null; }
+
+        routeLayer = L.polyline(latlngs, { color: '#fff', weight: 4, opacity: 0.8 }).addTo(map);
+
+        const routeStart = latlngs[0];
+        const routeEnd = latlngs[latlngs.length - 1];
+        const connectorStyle = { color: '#aaa', weight: 2, dashArray: '4,6', opacity: 0.5 };
+        if (origin && haversine(origin, routeStart) > 5) {
+          originConnector = L.polyline([origin, routeStart], connectorStyle).addTo(map);
+        }
+        if (dest && haversine(dest, routeEnd) > 5) {
+          destConnector = L.polyline([dest, routeEnd], connectorStyle).addTo(map);
+        }
+
         map.fitBounds(routeLayer.getBounds(), { padding: [60, 120] });
 
         const distM = data.distance_m != null ? data.distance_m : haversine(origin, dest);
@@ -675,20 +908,36 @@
           const total = p.estimate_eur != null ? p.estimate_eur.toFixed(2) : '--';
           const distKm = p.distance_km != null ? p.distance_km + ' km' : '';
           const breakdown = p.pricing_note || '';
-          priceHtml = `<br><strong style="font-size:15px;color:#111">Est. ${sym}${total}</strong> <span style="font-size:11px;color:#666">(${distKm})</span>`;
-          if (breakdown) priceHtml += `<br><span style="font-size:10px;color:#999">${breakdown}</span>`;
+          priceHtml = `<div class="price-row"><span class="price-amount">${sym}${total}</span><span class="price-detail">${distKm} walk</span></div>`;
+          if (breakdown) priceHtml += `<div style="font-size:10px;color:var(--fg3);margin-top:4px">${breakdown}</div>`;
         }
-        const note = data.source === 'fallback' && data.detail
-          ? '<br><span style="font-size:11px;color:#b45309">' + data.detail + '</span>'
-          : '<br><span style="font-size:11px;color:#999">A drone will watch over you the entire way</span>';
         routeInfoEl.innerHTML = `
-          <strong>Walking route</strong><br>
+          <strong>Pedestrian route</strong><br>
           ${(distM / 1000).toFixed(1)} km &middot; ~${walkMin} min walk
           ${priceHtml}
-          ${note}
+          <div id="safetyScoreRow" style="margin-top:8px;display:flex;align-items:center;gap:6px">
+            <div id="safetyDot" style="width:8px;height:8px;border-radius:50%;background:#ccc;flex-shrink:0"></div>
+            <span id="safetySummary" style="font-size:11px;color:var(--fg3)">Checking route safety...</span>
+          </div>
         `;
 
         showState('stateRoute');
+
+        fetch('/api/route-safety', {
+          method: 'POST', headers: {'Content-Type':'application/json'},
+          body: JSON.stringify({origin, destination: dest})
+        }).then(r=>r.json()).then(s => {
+          const dot = document.getElementById('safetyDot');
+          const txt = document.getElementById('safetySummary');
+          if (!dot || !txt) return;
+          const colors = {good:'var(--green)', moderate:'var(--amber)', poor:'var(--red)'};
+          dot.style.background = colors[s.level] || '#ccc';
+          txt.textContent = `${s.score}/10 — ${s.summary}`;
+          txt.style.color = s.level === 'poor' ? 'var(--red)' : 'var(--fg2)';
+        }).catch(() => {
+          const txt = document.getElementById('safetySummary');
+          if (txt) txt.textContent = 'Safety check unavailable';
+        });
       } catch (e) {
         console.error('Route error:', e);
         routeInfoEl.innerHTML = '';
@@ -705,7 +954,7 @@
         const resp = await fetch('/api/order', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ origin, destination: dest, route: routeCoords || null }),
+          body: JSON.stringify({ origin, destination: dest, route: routeCoords || null, city: currentCity }),
         });
         const data = await resp.json();
         if (data.detail || data.error) throw new Error(data.detail || data.error);
@@ -713,22 +962,20 @@
         missionStats = data.stats;
         if (data.hub) hubPosition = data.hub;
 
-        // Kill any stale timers and markers from previous missions
         if (droneRemoveTimer) { clearTimeout(droneRemoveTimer); droneRemoveTimer = null; }
         if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; }
         removeDemoUser();
         missionActive = false;
 
-        // Force drone marker at hub — this is the ONLY source of truth for starting position
         if (hubPosition) {
           droneMarker = L.marker([hubPosition.lat, hubPosition.lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
         }
 
         if (data.routes) {
           [approachLayer, escortLayer, returnLayer].forEach(l => { if (l) map.removeLayer(l); });
-          approachLayer = L.polyline(data.routes.approach, { color: '#888', weight: 2, dashArray: '6,4', opacity: 0.5 }).addTo(map);
-          escortLayer   = L.polyline(data.routes.escort,   { color: '#111', weight: 3, opacity: 0.7 }).addTo(map);
-          returnLayer   = L.polyline(data.routes['return'], { color: '#aaa', weight: 2, dashArray: '4,4', opacity: 0.4 }).addTo(map);
+          approachLayer = L.polyline(data.routes.approach, { color: '#666', weight: 2, dashArray: '6,4', opacity: 0.5 }).addTo(map);
+          escortLayer   = L.polyline(data.routes.escort,   { color: '#fff', weight: 3, opacity: 0.7 }).addTo(map);
+          returnLayer   = L.polyline(data.routes['return'], { color: '#555', weight: 2, dashArray: '4,4', opacity: 0.3 }).addTo(map);
         }
 
         const etaMin = Math.max(1, Math.ceil((data.approach_eta_s || 0) / 60));
@@ -738,13 +985,13 @@
         const s = data.stats || {};
         const pr = data.price || {};
         const sym = pr.currency === 'EUR' ? '\u20AC' : pr.currency || '';
-        const priceStr = pr.total_eur != null ? `<strong style="font-size:16px">${sym}${pr.total_eur.toFixed(2)}</strong>` : '';
-        const priceBreakdown = pr.base_eur != null ? `<span style="font-size:10px;color:#888">${sym}${pr.base_eur.toFixed(2)} base + ${sym}${pr.distance_eur.toFixed(2)} (${pr.escort_distance_km} km)</span>` : '';
+        const priceStr = pr.total_eur != null ? `<span class="price-amount">${sym}${pr.total_eur.toFixed(2)}</span>` : '';
+        const priceBreakdown = pr.base_eur != null ? `<span style="font-size:10px;color:var(--fg3)">${sym}${pr.base_eur.toFixed(2)} base + ${sym}${pr.distance_eur.toFixed(2)} (${pr.escort_distance_km} km)</span>` : '';
         document.getElementById('plannedInfo').innerHTML = `
           <strong>${s.total_waypoints} waypoints</strong> generated<br>
-          Approach (${s.approach_wp} wp) &rarr; Escort (${s.escort_wp} wp) &rarr; Return (${s.return_wp} wp)<br>
+          Approach (${s.approach_wp}) &rarr; Escort (${s.escort_wp}) &rarr; Return (${s.return_wp})<br>
           Total flight: ~${Math.round((s.estimated_flight_time_s||0)/60)} min &middot; ${s.total_distance_m}m<br>
-          ${priceStr} ${priceBreakdown}
+          <div class="price-row">${priceStr} ${priceBreakdown}</div>
         `;
 
         showState('statePlanned');
@@ -770,6 +1017,7 @@
         document.getElementById('droneText').textContent = data.source === 'mock' ? 'Drone launched (sim)' : 'ArduPilot armed — drone launching';
         document.getElementById('droneSub').textContent = '';
         document.getElementById('liveBadge').style.display = 'none';
+        document.getElementById('statusText').textContent = 'Mission active';
         startLiveTracking();
       } catch (e) {
         alert('Launch failed: ' + e.message);
@@ -786,9 +1034,11 @@
     document.getElementById('btnChangeOrigin').onclick = () => {
       origin = null;
       if (originMarker) { map.removeLayer(originMarker); originMarker = null; }
-      document.getElementById('originLabel').textContent = 'From: not set';
+      document.getElementById('originLabel').textContent = 'Tap map or search for start';
       document.getElementById('originLabel').classList.add('placeholder');
       if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
+      if (originConnector) { map.removeLayer(originConnector); originConnector = null; }
+      if (destConnector) { map.removeLayer(destConnector); destConnector = null; }
       searchInput.value = '';
       updateSearchPlaceholder();
       searchInput.focus();
@@ -800,7 +1050,9 @@
       destDisplayName = '';
       if (destMarker) { map.removeLayer(destMarker); destMarker = null; }
       if (routeLayer) { map.removeLayer(routeLayer); routeLayer = null; }
-      document.getElementById('destLabelIdle').textContent = 'To: search above or tap map';
+      if (originConnector) { map.removeLayer(originConnector); originConnector = null; }
+      if (destConnector) { map.removeLayer(destConnector); destConnector = null; }
+      document.getElementById('destLabelIdle').textContent = 'Search or tap map for destination';
       document.getElementById('destLabelIdle').classList.add('placeholder');
       searchInput.value = '';
       updateSearchPlaceholder();
@@ -815,6 +1067,8 @@
       ws = new WebSocket(`${proto}://${location.host}/ws`);
 
       ws.onopen = () => {
+        document.querySelector('.status-dot').style.background = 'var(--green)';
+        document.getElementById('statusText').textContent = missionActive ? 'Mission active' : 'Online';
         if (window._wsPingInterval) clearInterval(window._wsPingInterval);
         window._wsPingInterval = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify({ type: 'ping' }));
@@ -838,10 +1092,10 @@
           if (document.getElementById('stateActive').style.display !== 'none' && sub) {
             if (tl >= 8) {
               sub.textContent = 'Louise detects danger — hovering above you';
-              sub.style.color = '#dc2626';
+              sub.style.color = 'var(--red)';
             } else if (tl >= 5) {
               sub.textContent = 'Louise is alert — staying close';
-              sub.style.color = '#b45309';
+              sub.style.color = 'var(--amber)';
             } else {
               sub.style.color = '';
             }
@@ -865,14 +1119,14 @@
             const btn = document.getElementById('btnGo');
             if (msg.status === 'starting') { btn.textContent = 'Starting ArduPilot...'; btn.disabled = true; }
             else if (msg.status === 'warming_up') { btn.textContent = 'Warming up autopilot...'; btn.disabled = true; }
-            else if (msg.status === 'running') { btn.textContent = 'ArduPilot ready — arming...'; }
+            else if (msg.status === 'running') { btn.textContent = 'ArduPilot ready'; }
           }
         } else if (msg.type === 'connector_died') {
           document.getElementById('droneText').textContent = 'Connection lost';
-          document.getElementById('droneSub').textContent = 'Drone returning to hub — Mission Control will reconnect.';
+          document.getElementById('droneSub').textContent = 'Drone returning to hub';
           document.getElementById('liveBadge').style.display = 'none';
         } else if (msg.type === 'complete') {
-          if (!missionActive) return; // Ignore stale complete from cancelled missions
+          if (!missionActive) return;
           missionActive = false;
           stopLiveTracking();
           updateTimeline('return', null);
@@ -880,6 +1134,7 @@
           document.getElementById('droneText').textContent = 'Mission complete';
           document.getElementById('droneSub').textContent = 'Drone at hub — ready for next mission';
           document.getElementById('liveBadge').style.display = 'none';
+          document.getElementById('statusText').textContent = 'Online';
           if (hubPosition && droneMarker) {
             droneMarker.setLatLng([hubPosition.lat, hubPosition.lng]);
           }
@@ -890,6 +1145,8 @@
 
       ws.onclose = () => {
         document.getElementById('liveBadge').style.display = 'none';
+        document.querySelector('.status-dot').style.background = 'var(--red)';
+        document.getElementById('statusText').textContent = 'Reconnecting...';
         if (window._wsPingInterval) { clearInterval(window._wsPingInterval); window._wsPingInterval = null; }
         if (!window._wsReconnecting) {
           window._wsReconnecting = true;
@@ -901,13 +1158,13 @@
 
     const droneIcon = L.divIcon({
       className: '',
-      html: '<div style="width:14px;height:14px;background:#22c55e;border:2.5px solid #111;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.3);animation:dronePulse 1.2s infinite"></div>',
+      html: '<div style="width:14px;height:14px;background:#22c55e;border:2.5px solid #fff;border-radius:50%;box-shadow:0 2px 8px rgba(0,0,0,0.4);animation:dronePulse 1.2s infinite"></div>',
       iconSize: [14, 14], iconAnchor: [7, 7],
     });
 
     function updateDrone(msg) {
       if (msg.lat == null || msg.lng == null) return;
-      if (msg.source === 'hub_reset') return; // Order handler already placed marker at hub
+      if (msg.source === 'hub_reset') return;
       if (!droneMarker) {
         droneMarker = L.marker([msg.lat, msg.lng], { icon: droneIcon, zIndexOffset: 1000 }).addTo(map);
       } else {
@@ -929,11 +1186,11 @@
 
     function phaseLabel(p) {
       return {
-        approach: 'Drone approaching at 50 m/s',
-        hub_to_user: 'Drone approaching at 50 m/s',
+        approach: 'Drone approaching',
+        hub_to_user: 'Drone approaching',
         escort: 'Drone escorting you',
         track: 'Drone escorting you',
-        'return': 'Drone returned to hub',
+        'return': 'Drone returning to hub',
       }[p] || (p ? String(p).replace(/_/g, ' ') : '');
     }
 
@@ -964,24 +1221,20 @@
       if (!phase) return;
       const norm = phaseToTimeline[phase] || phase;
       activePhase = norm;
-
       const phases = ['Approach', 'Escort', 'Return'];
       const dotIds = { Approach: 'tlDotApproach', Escort: 'tlDotEscort', Return: 'tlDotReturn' };
       const labelIds = { Approach: 'tlLabelApproach', Escort: 'tlLabelEscort', Return: 'tlLabelReturn' };
       const speedIds = { Approach: 'tlSpeedApproach', Escort: 'tlSpeedEscort', Return: 'tlSpeedReturn' };
       const lineIds = ['tlLine1', 'tlLine2'];
-
       let reached = false;
       phases.forEach(function(p, idx) {
         const dot = document.getElementById(dotIds[p]);
         const label = document.getElementById(labelIds[p]);
         const spd = document.getElementById(speedIds[p]);
         if (!dot) return;
-
         dot.className = 'tl-dot';
         label.className = 'tl-label';
         if (spd) spd.className = 'tl-speed';
-
         if (p === norm) {
           dot.classList.add('active');
           label.classList.add('active');
@@ -994,7 +1247,6 @@
           dot.classList.add('done');
           label.classList.add('done');
         }
-
         if (idx < lineIds.length) {
           const line = document.getElementById(lineIds[idx]);
           if (line) line.className = 'tl-line' + (!reached ? ' done' : '');
@@ -1036,7 +1288,7 @@
           }
           stopLiveTracking();
           document.getElementById('droneText').textContent = 'You arrived safely';
-          document.getElementById('droneSub').textContent = 'Drone returning to hub — mission complete';
+          document.getElementById('droneSub').textContent = 'Drone returning to hub';
         }
       } else {
         _arrivalProximityStart = null;
@@ -1050,7 +1302,7 @@
       if (!navigator.geolocation) {
         if (document.getElementById('stateActive').style.display !== 'none') {
           document.getElementById('droneSub').textContent = 'Location not supported — use a device with GPS.';
-          document.getElementById('droneSub').style.color = '#b45309';
+          document.getElementById('droneSub').style.color = 'var(--amber)';
         }
         return;
       }
@@ -1058,7 +1310,8 @@
       watchId = navigator.geolocation.watchPosition(
         function (pos) {
           document.getElementById('droneSub').style.color = '';
-          if (document.getElementById('geoError')) document.getElementById('geoError').style.display = 'none';
+          var geoErr = document.getElementById('geoError');
+          if (geoErr) geoErr.style.display = 'none';
           _checkAutoArrival(pos.coords.latitude, pos.coords.longitude);
           if (ws && ws.readyState === WebSocket.OPEN) {
             var now = Date.now();
@@ -1071,7 +1324,7 @@
           var sub = document.getElementById('droneSub');
           if (document.getElementById('stateActive').style.display !== 'none' && sub) {
             sub.textContent = err.code === 1 ? 'Location denied — enable location so the drone can follow you.' : 'Location unavailable — check GPS.';
-            sub.style.color = '#b45309';
+            sub.style.color = 'var(--amber)';
           }
         },
         { enableHighAccuracy: true, maximumAge: 2000, timeout: 5000 }
@@ -1091,12 +1344,16 @@
       if (navigator.vibrate) navigator.vibrate([500, 200, 500]);
     };
 
-    document.getElementById('btnCancel').onclick = () => {
+    document.getElementById('btnCancel').onclick = async () => {
       stopLiveTracking();
-      if (ws) ws.close();
-      ws = null;
-      [approachLayer, escortLayer, returnLayer, routeLayer].forEach(l => { if (l) map.removeLayer(l); });
+      missionActive = false;
+      removeDemoUser();
+      try { await fetch('/api/mission/cancel', { method: 'POST' }); } catch(_) {}
+      [approachLayer, escortLayer, returnLayer, routeLayer, originConnector, destConnector].forEach(l => { if (l) map.removeLayer(l); });
+      originConnector = null; destConnector = null;
       if (droneMarker) { map.removeLayer(droneMarker); droneMarker = null; }
+      document.getElementById('statusText').textContent = 'Online';
+      document.getElementById('liveBadge').style.display = 'none';
       showState('stateIdle');
     };
 
@@ -1121,7 +1378,6 @@
       countdownInterval = setInterval(() => {
         countdownLeft--;
         document.getElementById('countdown').textContent = countdownLeft;
-        // Audio tick for urgency
         try { const ctx = new (window.AudioContext || window.webkitAudioContext)();
           const o = ctx.createOscillator(); o.frequency.value = countdownLeft <= 5 ? 880 : 440;
           o.connect(ctx.destination); o.start(); o.stop(ctx.currentTime + 0.1);
@@ -1129,7 +1385,6 @@
         if (countdownLeft <= 0) {
           clearInterval(countdownInterval);
           document.getElementById('countdown').textContent = 'SENT';
-          // Use CURRENT GPS position, not stale origin
           const emergencyPayload = { type: 'emergency' };
           if (navigator.geolocation) {
             navigator.geolocation.getCurrentPosition(
@@ -1143,7 +1398,6 @@
             emergencyPayload.origin = origin;
             if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(emergencyPayload));
           }
-          // Also try HTTP fallback in case WS is down
           fetch('/api/emergency', { method: 'POST',
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify(emergencyPayload)
@@ -1151,9 +1405,9 @@
           setTimeout(() => {
             showState('stateActive');
             document.getElementById('droneCard').style.background = '#fff';
-            document.getElementById('droneCard').style.borderColor = '#dc2626';
+            document.getElementById('droneCard').style.borderColor = 'var(--red)';
             document.getElementById('droneText').textContent = 'Emergency — drone locked on position';
-            document.getElementById('droneText').style.color = '#dc2626';
+            document.getElementById('droneText').style.color = 'var(--red)';
           }, 1500);
         }
       }, 1000);
@@ -1185,58 +1439,48 @@
       const input = document.getElementById('louiseInput');
       const sendBtn = document.getElementById('louiseSend');
       const body = document.getElementById('louiseChatBody');
-      let conversationHistory = [];
-      let waiting = false;
+      let conversation = [];
 
-      fab.onclick = function() { chat.classList.toggle('open'); if (chat.classList.contains('open')) input.focus(); };
-      closeBtn.onclick = function() { chat.classList.remove('open'); };
+      fab.onclick = () => chat.classList.toggle('open');
+      closeBtn.onclick = () => chat.classList.remove('open');
 
-      function addMsg(text, cls) {
-        const d = document.createElement('div');
-        d.className = 'chat-msg ' + cls;
-        d.textContent = text;
-        body.appendChild(d);
+      function addMsg(role, text) {
+        const div = document.createElement('div');
+        div.className = `chat-msg ${role}`;
+        div.innerHTML = text;
+        body.appendChild(div);
         body.scrollTop = body.scrollHeight;
+        return div;
       }
 
-      async function sendMessage() {
+      async function send() {
         const msg = input.value.trim();
-        if (!msg || waiting) return;
+        if (!msg) return;
         input.value = '';
-        addMsg(msg, 'user');
-        conversationHistory.push({ role: 'user', content: msg });
-        waiting = true;
-
-        const thinkingEl = document.createElement('div');
-        thinkingEl.className = 'chat-msg thinking';
-        thinkingEl.textContent = 'Louise is thinking';
-        body.appendChild(thinkingEl);
-        body.scrollTop = body.scrollHeight;
-
+        addMsg('user', msg);
+        conversation.push({ role: 'user', content: msg });
+        const thinking = addMsg('thinking', 'Louise is thinking');
         try {
           const resp = await fetch('/api/louise', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ message: msg, conversation: conversationHistory }),
+            body: JSON.stringify({ message: msg, conversation }),
           });
-          thinkingEl.remove();
           const data = await resp.json();
-          const tools = data.tool_calls_made || [];
-          if (tools.length > 0) {
-            addMsg('Checked: ' + tools.map(function(t) { return t.tool.replace(/_/g,' '); }).join(', '), 'tools');
+          thinking.remove();
+          if (data.tools_used && data.tools_used.length) {
+            addMsg('tools', 'Used: ' + data.tools_used.join(', '));
           }
-          const reply = data.response || 'I couldn\'t process that. Try again?';
-          addMsg(reply, 'louise');
-          conversationHistory.push({ role: 'assistant', content: reply });
+          const reply = data.response || data.error || 'No response';
+          addMsg('louise', reply);
+          conversation.push({ role: 'assistant', content: reply });
         } catch (e) {
-          thinkingEl.remove();
-          addMsg('Connection error. Try again.', 'louise');
+          thinking.remove();
+          addMsg('louise', 'Connection error. Try again.');
         }
-        waiting = false;
       }
-
-      sendBtn.onclick = sendMessage;
-      input.onkeydown = function(e) { if (e.key === 'Enter') sendMessage(); };
+      sendBtn.onclick = send;
+      input.onkeydown = (e) => { if (e.key === 'Enter') send(); };
     })();
   </script>
 </body>
