@@ -14,6 +14,12 @@ MISTRAL_FAST_MODEL = os.getenv("MISTRAL_FAST_MODEL", "mistral-small-latest")    
 HELPSTRAL_MODEL_ID = os.getenv("HELPSTRAL_MODEL_ID", MISTRAL_VISION_MODEL)         # overridden by fine-tuned ID
 FLYSTRAL_MODEL_ID = os.getenv("FLYSTRAL_MODEL_ID", MISTRAL_EDGE_MODEL)             # overridden by fine-tuned ID
 
+# Flystral fine-tuned model: remote endpoint (Colab GPU) or local LoRA adapter
+FLYSTRAL_ENDPOINT = os.getenv("FLYSTRAL_ENDPOINT", "")  # e.g. https://xxxx.ngrok.io
+FLYSTRAL_ADAPTER_PATH = os.getenv("FLYSTRAL_ADAPTER_PATH", "")
+if FLYSTRAL_ADAPTER_PATH and not os.path.isabs(FLYSTRAL_ADAPTER_PATH):
+    FLYSTRAL_ADAPTER_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), FLYSTRAL_ADAPTER_PATH)
+
 # Routing — OSRM public (no key needed), ORS as fallback
 OSRM_BASE_URL = "http://router.project-osrm.org/route/v1"
 ORS_API_KEY = os.getenv("ORS_API_KEY", "")

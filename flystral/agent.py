@@ -14,7 +14,7 @@ import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import FLYSTRAL_MODEL_ID, MISTRAL_API_KEY, MISTRAL_VISION_MODEL
+from config import FLYSTRAL_MODEL_ID, MISTRAL_API_KEY, MISTRAL_VISION_MODEL, FLYSTRAL_ADAPTER_PATH, FLYSTRAL_ENDPOINT
 from flystral.command_parser import VALID_COMMANDS, parse_velocity_output
 
 FINETUNED_PROMPT = (
@@ -98,6 +98,148 @@ DEFAULT_VELOCITY = {"vx": 2.0, "vy": 0.0, "vz": 0.0, "yaw_rate": 0.0}
 def _is_finetuned_model(model_id: str) -> bool:
     """Check if the model ID indicates a fine-tuned model (not a base model)."""
     return model_id.startswith("ft:") if model_id else False
+
+
+def _run_remote_endpoint(image_b64: str, heading_rad: float = 0.0) -> dict:
+    """Call the remote Flystral inference server (Colab GPU via ngrok)."""
+    import requests
+
+    url = FLYSTRAL_ENDPOINT.rstrip("/") + "/predict"
+    resp = requests.post(url, json={"image": image_b64}, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+
+    vel = {
+        "vx": float(data.get("vx", 2.0)),
+        "vy": float(data.get("vy", 0.0)),
+        "vz": float(data.get("vz", 0.0)),
+        "yaw_rate": float(data.get("yaw_rate", 0.0)),
+    }
+    offset = parse_velocity_output(vel, heading_rad)
+
+    return {
+        "mode": "velocity",
+        "vx": offset["vx"],
+        "vy": offset["vy"],
+        "vz": offset["vz"],
+        "yaw_rate": offset["yaw_rate"],
+        "offset": offset,
+        "raw": data.get("raw", ""),
+        "model": "remote-lora-ministral-3b",
+        "inference_ms": data.get("inference_ms"),
+        "timestamp": time.time(),
+        "tool_calls_made": [],
+        "source": "remote_finetuned",
+    }
+
+
+def _has_local_adapter() -> bool:
+    """Check if a local LoRA adapter is available."""
+    if not FLYSTRAL_ADAPTER_PATH:
+        return False
+    return Path(FLYSTRAL_ADAPTER_PATH).exists() and (
+        (Path(FLYSTRAL_ADAPTER_PATH) / "adapter_config.json").exists()
+    )
+
+
+_local_model = None
+_local_processor = None
+
+
+def _load_local_model():
+    """Lazy-load the base model + LoRA adapter. Cached after first call."""
+    global _local_model, _local_processor
+    if _local_model is not None:
+        return _local_model, _local_processor
+
+    import torch
+    from transformers import AutoProcessor, Mistral3ForConditionalGeneration
+    from peft import PeftModel
+
+    base_id = "mistralai/Ministral-3-3B-Instruct-2512-BF16"
+
+    if torch.backends.mps.is_available():
+        device = "mps"
+        dtype = torch.float16
+    elif torch.cuda.is_available():
+        device = "cuda"
+        dtype = torch.bfloat16
+    else:
+        device = "cpu"
+        dtype = torch.float32
+
+    print(f"[Flystral] Loading {base_id} on {device}...")
+    processor = AutoProcessor.from_pretrained(base_id)
+
+    model = Mistral3ForConditionalGeneration.from_pretrained(
+        base_id, torch_dtype=dtype, low_cpu_mem_usage=True,
+    )
+    model = PeftModel.from_pretrained(model, FLYSTRAL_ADAPTER_PATH)
+    model = model.merge_and_unload()
+    model = model.to(device)
+    model.eval()
+    print(f"[Flystral] Model loaded on {device}")
+
+    _local_model = model
+    _local_processor = processor
+    return model, processor
+
+
+def _run_local_lora(image_b64: str, heading_rad: float = 0.0) -> dict:
+    """Run inference using the local LoRA-finetuned model."""
+    import base64
+    import io
+    import torch
+    from PIL import Image
+
+    model, processor = _load_local_model()
+    device = next(model.parameters()).device
+
+    img_bytes = base64.b64decode(image_b64)
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+
+    messages = [{"role": "user", "content": [
+        {"type": "image"},
+        {"type": "text", "text": "Output the raw telemetry for this frame."},
+    ]}]
+
+    text = processor.apply_chat_template(messages, add_generation_prompt=True)
+    inputs = processor(text=text, images=[img], return_tensors="pt").to(device)
+
+    with torch.no_grad():
+        output_ids = model.generate(**inputs, max_new_tokens=200, do_sample=False)
+
+    input_len = inputs["input_ids"].shape[-1]
+    raw = processor.decode(output_ids[0][input_len:], skip_special_tokens=True).strip()
+
+    values = []
+    for tok in raw.replace(",", " ").split():
+        try:
+            values.append(float(tok))
+        except ValueError:
+            continue
+
+    vx = values[0] if len(values) > 0 else 2.0
+    vy = values[1] if len(values) > 1 else 0.0
+    vz = values[2] if len(values) > 2 else 0.0
+    yaw = values[3] if len(values) > 3 else 0.0
+
+    vel = {"vx": vx, "vy": vy, "vz": vz, "yaw_rate": yaw}
+    offset = parse_velocity_output(vel, heading_rad)
+
+    return {
+        "mode": "velocity",
+        "vx": offset["vx"],
+        "vy": offset["vy"],
+        "vz": offset["vz"],
+        "yaw_rate": offset["yaw_rate"],
+        "offset": offset,
+        "raw": raw,
+        "model": "local-lora-ministral-3b",
+        "timestamp": time.time(),
+        "tool_calls_made": [],
+        "source": "local_finetuned",
+    }
 
 # ── Shared state (set by server.py) ──────────────────────────────────────────
 
@@ -284,6 +426,20 @@ def run_flystral_agent(
 
     model = FLYSTRAL_MODEL_ID or MISTRAL_VISION_MODEL
 
+    # Priority 1: remote endpoint (Colab GPU serving fine-tuned model)
+    if FLYSTRAL_ENDPOINT:
+        try:
+            return _run_remote_endpoint(image_b64, heading_rad)
+        except Exception as e:
+            print(f"[Flystral] Remote endpoint failed, falling back: {e}")
+
+    # Priority 2: local LoRA adapter
+    if _has_local_adapter():
+        try:
+            return _run_local_lora(image_b64, heading_rad)
+        except Exception as e:
+            print(f"[Flystral] Local LoRA failed, falling back to API: {e}")
+
     if not MISTRAL_API_KEY:
         result = dict(DEFAULT_RESULT)
         result["mode"] = "discrete"
@@ -298,6 +454,7 @@ def run_flystral_agent(
         result["tool_calls_made"] = []
         return result
 
+    # Priority 2: Mistral API fine-tuned model (ft:* prefix)
     if _is_finetuned_model(model):
         return _run_finetuned(image_b64, heading_rad)
 

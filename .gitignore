@@ -16,3 +16,10 @@ build/
 helpstral/dataset/helpstral_dataset.jsonl
 helpstral/dataset/*.jsonl
 flystral/dataset/*.jsonl
+flystral/ministral-drone-final/.cache/
+flystral/ministral-drone-final/.gitattributes
+flystral/ministral-drone-final/adapter_model.safetensors
+flystral/ministral-drone-final/model.zip
+flystral/ministral-drone-final/tokenizer.json
+flystral/ministral-drone-final/.gitattributes
+flystral/ministral-drone-final/.cache/

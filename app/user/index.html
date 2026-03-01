@@ -4,9 +4,9 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Louise</title>
-  <meta name="theme-color" content="#000000">
+  <meta name="theme-color" content="#ffffff">
   <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <link rel="preconnect" href="https://unpkg.com" crossorigin>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -41,27 +41,46 @@
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-    html, body { height: 100%; overflow: hidden; overscroll-behavior: none; }
+    html, body { min-height: 100%; overflow-x: hidden; }
     body {
       font-family: 'Inter', system-ui, -apple-system, sans-serif;
-      background: var(--bg); color: var(--fg);
+      background: #f4f5f7; color: var(--fg);
       -webkit-font-smoothing: antialiased;
+      overflow-y: auto;
     }
 
-    /* ── Map ── */
-    #map { position: absolute; inset: 0; z-index: 0; }
+    .page-wrap {
+      width: 92%; max-width: 860px; margin: 0 auto;
+      padding: calc(var(--safe-top) + 16px) 0 48px;
+    }
+
+    /* ── Map box ── */
+    .map-wrap {
+      width: 100%;
+      padding: 10px; background: var(--card-solid);
+      border-radius: var(--radius-lg); box-shadow: var(--shadow-md);
+      border: 1px solid var(--border);
+      position: relative;
+    }
+    #map { width: 100%; height: 50vh; min-height: 300px; max-height: 500px; border-radius: var(--radius-md); overflow: hidden; }
     .leaflet-control-attribution { display: none !important; }
     .leaflet-control-zoom { border: none !important; box-shadow: var(--shadow-md) !important; border-radius: var(--radius-sm) !important; overflow: hidden; }
     .leaflet-control-zoom a { width: 36px !important; height: 36px !important; line-height: 36px !important; font-size: 16px !important; color: var(--fg) !important; background: var(--card-solid) !important; border: none !important; }
 
+    /* ── Main content ── */
+    .main-content {
+      width: 100%; margin: 0 auto; padding: 0;
+    }
+
     /* ── Top Bar ── */
     .top-bar {
-      position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
-      padding: var(--safe-top) 16px 0;
+      background: var(--card-solid); border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm); border: 1px solid var(--border);
+      padding: 16px 20px 14px; margin-top: 12px;
+      position: relative;
     }
     .top-header {
-      display: flex; align-items: center; gap: 10px; margin-bottom: 10px;
-      padding: 0 4px;
+      display: flex; align-items: center; gap: 10px; margin-bottom: 12px;
     }
     .brand {
       display: flex; align-items: center; gap: 8px;
@@ -111,7 +130,7 @@
     .search-results {
       display: none; background: var(--card-solid); border-radius: var(--radius-md); margin-top: 8px;
       box-shadow: var(--shadow-lg); max-height: 240px; overflow-y: auto;
-      border: 1px solid var(--border);
+      border: 1px solid var(--border); z-index: 50;
     }
     .search-result {
       padding: 12px 16px; cursor: pointer; font-size: 14px;
@@ -126,35 +145,26 @@
     .search-result .sr-addr { font-size: 12px; color: var(--fg3); margin-top: 2px; }
     .search-status { padding: 14px 16px; font-size: 14px; color: var(--fg3); }
 
-    .city-bar { display: flex; gap: 6px; margin-top: 8px; padding: 0 2px; }
-    .city-pill {
-      flex: 1; padding: 7px 0; border-radius: var(--radius-pill); border: 1.5px solid rgba(0,0,0,0.08);
-      background: var(--card); backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
-      font-size: 12px; font-weight: 600; color: var(--fg3);
-      cursor: pointer; text-align: center; font-family: inherit;
-      transition: all 0.2s; box-shadow: var(--shadow-sm);
-    }
-    .city-pill:active { transform: scale(0.96); }
-    .city-pill.active {
-      background: var(--accent); color: #fff; border-color: var(--accent);
-      box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+    .city-bar { margin-top: 8px; }
+    .city-select {
+      width: 100%; padding: 12px 14px; border-radius: var(--radius-pill);
+      border: 1px solid var(--border); background: var(--card-solid);
+      font-size: 14px; font-weight: 500; color: var(--fg);
+      font-family: inherit; cursor: pointer; height: 48px;
+      appearance: none; -webkit-appearance: none;
+      box-shadow: var(--shadow-sm);
+      background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'%3E%3Cpath fill='%23999' d='M6 8L1 3h10z'/%3E%3C/svg%3E");
+      background-repeat: no-repeat; background-position: right 14px center; padding-right: 36px;
     }
 
-    /* ── Bottom Sheet ── */
+    /* ── Bottom Sheet (card in flow) ── */
     .bottom-sheet {
-      position: absolute; bottom: 0; left: 0; right: 0; z-index: 1000;
-      background: var(--card-solid); border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-      box-shadow: var(--shadow-sheet);
-      padding: 0 20px; padding-bottom: var(--safe-bottom);
-      transition: transform 0.35s cubic-bezier(0.32, 0.72, 0, 1);
-      max-height: 65vh; overflow-y: auto;
-      -webkit-overflow-scrolling: touch;
+      background: var(--card-solid); border-radius: var(--radius-lg);
+      box-shadow: var(--shadow-sm); border: 1px solid var(--border);
+      padding: 20px; margin-top: 12px;
     }
-    .sheet-handle {
-      width: 36px; height: 4px; border-radius: 2px;
-      background: #e0e0e0; margin: 10px auto 0;
-    }
-    .sheet-content { padding: 16px 0 4px; }
+    .sheet-handle { display: none; }
+    .sheet-content { padding: 0; }
 
     /* ── Location rows ── */
     .loc-row {
@@ -179,8 +189,8 @@
 
     /* ── Info cards ── */
     .info-card {
-      background: var(--accent-soft); border-radius: var(--radius-sm); padding: 14px 16px;
-      margin: 10px 0; font-size: 13px; color: var(--fg2); line-height: 1.6;
+      background: var(--accent-soft); border-radius: var(--radius-sm); padding: 16px 18px;
+      margin: 12px 0; font-size: 13px; color: var(--fg2); line-height: 1.6;
       border: 1px solid var(--border);
     }
     .info-card strong { color: var(--fg); }
@@ -193,7 +203,7 @@
 
     .eta-card {
       background: var(--accent-soft); border: 1px solid var(--border);
-      border-radius: var(--radius-md); padding: 20px; margin: 10px 0; text-align: center;
+      border-radius: var(--radius-md); padding: 24px; margin: 12px 0; text-align: center;
     }
     .eta-time {
       font-size: 32px; font-weight: 900; color: var(--fg);
@@ -266,23 +276,24 @@
     /* ── Mission timeline ── */
     .mission-timeline {
       display: flex; align-items: center; gap: 0; margin: 12px 0 8px;
-      background: var(--accent-soft); border-radius: var(--radius-sm); padding: 10px 14px;
+      background: var(--accent-soft); border-radius: var(--radius-sm); padding: 10px 12px;
       border: 1px solid var(--border);
+      min-width: 0; overflow: hidden;
     }
-    .tl-phase { flex: 1; text-align: center; }
+    .tl-phase { flex: 1 1 0; min-width: 0; text-align: center; overflow: hidden; }
     .tl-dot {
-      width: 12px; height: 12px; border-radius: 50%; background: #e0e0e0;
-      margin: 0 auto 4px; border: 2px solid #ccc; transition: all 0.3s;
+      width: 10px; height: 10px; border-radius: 50%; background: #e0e0e0;
+      margin: 0 auto 3px; border: 2px solid #ccc; transition: all 0.3s;
     }
     .tl-dot.active { background: var(--accent); border-color: var(--accent); animation: tl-pulse 1.5s infinite; }
     .tl-dot.done { background: var(--accent); border-color: var(--accent); }
-    .tl-label { font-size: 10px; color: var(--fg3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; }
+    .tl-label { font-size: 9px; color: var(--fg3); font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tl-label.active { color: var(--fg); }
     .tl-label.done { color: var(--fg); }
-    .tl-line { width: 100%; height: 2px; background: #e0e0e0; flex: 0 0 auto; min-width: 20px; transition: background 0.3s; }
+    .tl-line { height: 2px; background: #e0e0e0; flex: 0 0 14px; transition: background 0.3s; }
     .tl-line.done { background: var(--accent); }
     @keyframes tl-pulse { 0%,100% { box-shadow: 0 0 0 0 rgba(0,0,0,0.3); } 50% { box-shadow: 0 0 0 6px rgba(0,0,0,0); } }
-    .tl-speed { font-size: 10px; color: var(--fg3); margin-top: 2px; }
+    .tl-speed { font-size: 9px; color: var(--fg3); margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .tl-speed.active { color: var(--fg); font-weight: 700; }
 
     /* ── Emergency ── */
@@ -295,9 +306,9 @@
 
     /* ── FAB + Chat ── */
     .locate-btn {
-      position: absolute; bottom: 0; right: 16px; z-index: 999;
+      position: fixed; bottom: 24px; right: 20px; z-index: 999;
       width: 44px; height: 44px; border-radius: 50%;
-      background: var(--card-solid); border: none; cursor: pointer;
+      background: var(--card-solid); border: 1px solid var(--border); cursor: pointer;
       box-shadow: var(--shadow-md);
       display: flex; align-items: center; justify-content: center;
       transition: transform 0.15s;
@@ -306,7 +317,7 @@
     .locate-btn:active { transform: scale(0.9); }
 
     .louise-fab {
-      position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 320px); right: 16px;
+      position: fixed; bottom: 80px; right: 20px;
       z-index: 1200; width: 50px; height: 50px; border-radius: 50%;
       background: var(--accent); border: none; cursor: pointer;
       display: flex; align-items: center; justify-content: center;
@@ -315,10 +326,10 @@
     }
     .louise-fab:active { transform: scale(0.88); }
     .louise-chat {
-      position: absolute; bottom: calc(env(safe-area-inset-bottom, 0px) + 380px); right: 16px;
-      z-index: 1200; width: min(360px, calc(100vw - 32px)); background: var(--card-solid);
+      position: fixed; bottom: 140px; right: 20px;
+      z-index: 1200; width: min(380px, calc(100vw - 40px)); background: var(--card-solid);
       border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
-      display: none; flex-direction: column; max-height: 400px;
+      display: none; flex-direction: column; max-height: 420px;
       border: 1px solid var(--border); overflow: hidden;
     }
     .louise-chat.open { display: flex; }
@@ -352,29 +363,63 @@
     }
     .louise-chat-input button:active { transform: scale(0.9); }
 
-    /* ── Idle state extras ── */
-    .feature-grid {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin: 12px 0 6px;
+    .helpstral-section {
+      margin-top: 12px; padding: 20px; background: var(--card-solid);
+      border-radius: var(--radius-lg); border: 1px solid var(--border);
+      box-shadow: var(--shadow-sm);
     }
-    .feature-item {
-      display: flex; align-items: center; gap: 8px;
-      padding: 10px 12px; border-radius: var(--radius-sm);
-      background: var(--accent-soft); border: 1px solid var(--border);
-      font-size: 12px; font-weight: 500; color: var(--fg2);
+    .helpstral-section-title {
+      font-size: 13px; font-weight: 700; color: #0369a1; margin-bottom: 10px;
+      display: flex; align-items: center; gap: 6px;
     }
-    .feature-item svg { width: 16px; height: 16px; flex-shrink: 0; stroke: var(--fg3); fill: none; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+    .helpstral-section-title::before {
+      content: ''; display: inline-block; width: 8px; height: 8px;
+      border-radius: 50%; background: #0ea5e9; flex-shrink: 0;
+    }
+    .helpstral-section p { font-size: 13px; color: var(--fg2); line-height: 1.65; margin: 0 0 10px; }
+    .helpstral-section p:last-child { margin-bottom: 0; }
+    .helpstral-status {
+      font-size: 12px; padding: 10px 14px; background: #f0f9ff;
+      border-radius: var(--radius-sm); margin-top: 12px;
+      border: 1px solid #bae6fd; color: var(--fg2);
+    }
 
     @keyframes pulse { 50% { opacity: 0.4; } }
 
-    /* Smooth transitions for all states */
     #stateIdle, #stateRoute, #statePlanned, #stateActive, #stateDistress {
       animation: fadeIn 0.25s ease;
     }
     @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+
+    .page-footer {
+      text-align: center; padding: 24px 0 8px;
+      font-size: 11px; color: var(--fg3); letter-spacing: 0.02em;
+    }
+
+    @media (min-width: 640px) {
+      .page-wrap { width: 88%; }
+      .top-bar { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 12px; padding: 18px 24px 16px; }
+      .top-header { margin-bottom: 0; flex: 1 1 auto; min-width: 200px; }
+      .search-card { flex: 2 1 260px; min-width: 0; }
+      .city-bar { flex: 0 0 auto; margin-top: 0; min-width: 140px; }
+      .city-select { width: auto; min-width: 140px; }
+      .search-results { position: absolute; left: 0; right: 0; z-index: 100; }
+      .bottom-sheet { padding: 24px; }
+      .helpstral-section { padding: 24px; }
+      .btn { max-width: 340px; }
+    }
+
+    @media (min-width: 960px) {
+      .page-wrap { width: 80%; max-width: 920px; }
+      #map { height: 55vh; max-height: 560px; }
+    }
   </style>
 </head>
 <body>
-  <div id="map"></div>
+  <div class="page-wrap">
+  <div class="map-wrap">
+    <div id="map"></div>
+  </div>
 
   <button class="locate-btn" id="btnLocate" title="My location">
     <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>
@@ -396,6 +441,7 @@
     </div>
   </div>
 
+  <div class="main-content">
   <div class="top-bar" id="topBar">
     <div class="top-header">
       <div class="brand">
@@ -415,7 +461,13 @@
       <input type="text" id="searchInput" placeholder="Where are you going?" autocomplete="off" />
       <button class="search-clear" id="searchClear">&times;</button>
     </div>
-    <div class="city-bar" id="cityBar"></div>
+    <div class="city-bar">
+      <select class="city-select" id="citySelect" aria-label="Select city">
+        <option value="paris">Paris</option>
+        <option value="dublin">Dublin</option>
+        <option value="london">London</option>
+      </select>
+    </div>
     <div class="search-results" id="searchResults"></div>
   </div>
 
@@ -440,24 +492,6 @@
         <p style="font-size:12px;color:var(--fg3);line-height:1.5;margin:10px 0 4px" id="idleHint">
           Set your start and destination, then request a drone escort for your walk.
         </p>
-        <div class="feature-grid">
-          <div class="feature-item">
-            <svg viewBox="0 0 24 24"><path d="M12 22s-8-4.5-8-11.8A8 8 0 0 1 12 2a8 8 0 0 1 8 8.2c0 7.3-8 11.8-8 11.8z"/><circle cx="12" cy="10" r="3"/></svg>
-            Live GPS tracking
-          </div>
-          <div class="feature-item">
-            <svg viewBox="0 0 24 24"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
-            AI safety scan
-          </div>
-          <div class="feature-item">
-            <svg viewBox="0 0 24 24"><path d="M22 11.08V12a10 10 0 11-5.93-9.14"/><path d="M22 4L12 14.01l-3-3"/></svg>
-            Verified routes
-          </div>
-          <div class="feature-item">
-            <svg viewBox="0 0 24 24"><path d="M12 22c5.523 0 10-4.477 10-10S17.523 2 12 2 2 6.477 2 12s4.477 10 10 10z"/><path d="M12 6v6l4 2"/></svg>
-            24/7 available
-          </div>
-        </div>
       </div>
 
       <!-- ROUTE STATE -->
@@ -536,6 +570,17 @@
     </div>
   </div>
 
+  <div class="helpstral-section" id="helpstralSection">
+    <div class="helpstral-section-title">Helpstral Safety Monitor</div>
+    <p>Helpstral is our vision AI that runs on the drone camera feed during your escort. It watches for unusual activity, people following, or changes in the environment. When it detects a potential threat, it can lower the drone to stay closer, trigger an alert to mission control, or adjust the flight path.</p>
+    <p>During an active escort, Helpstral assessments are streamed in real time. Threat levels range from SAFE (1–4) to CAUTION (5–7) to DISTRESS (8–10). Three consecutive high-threat readings trigger an automatic emergency alert.</p>
+    <div class="helpstral-status" id="helpstralStatus">No active escort — Helpstral will activate when your drone is in flight.</div>
+  </div>
+
+  <div class="page-footer">Louise &mdash; Walk safe. Walk home.</div>
+  </div><!-- .main-content -->
+  </div><!-- .page-wrap -->
+
   <script>
     (function loadMapThenApp() {
       function run() {
@@ -547,31 +592,33 @@
     let currentCity = 'paris';
 
     const map = L.map('map', { zoomControl: false }).setView([CITIES.paris.center.lat, CITIES.paris.center.lng], 14);
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
-      maxZoom: 19
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+      attribution: '&copy; OSM &copy; CARTO', maxZoom: 19
     }).addTo(map);
     L.control.zoom({ position: 'topright' }).addTo(map);
 
     const hubIcon = L.divIcon({
       className: '',
-      html: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V10.5z" fill="#fff" stroke="#000" stroke-width="1.5"/><rect x="9" y="14" width="6" height="7" rx="0.5" fill="#000"/></svg>`,
+      html: `<svg width="22" height="22" viewBox="0 0 24 24" fill="none"><path d="M3 10.5L12 3l9 7.5V20a1 1 0 01-1 1H4a1 1 0 01-1-1V10.5z" fill="#111" stroke="#fff" stroke-width="1.5"/><rect x="9" y="14" width="6" height="7" rx="0.5" fill="#fff"/></svg>`,
       iconSize: [22, 22], iconAnchor: [11, 19],
     });
     let hubMarker = L.marker([CITIES.paris.hub.lat, CITIES.paris.hub.lng], { icon: hubIcon }).addTo(map)
       .bindPopup('<strong>Louise Drone Centre</strong><br>Louvre, Paris');
 
-    const cityBar = document.getElementById('cityBar');
-    function buildCityPills() {
-      cityBar.innerHTML = '';
+    const citySelect = document.getElementById('citySelect');
+    function buildCitySelect() {
+      if (!citySelect) return;
+      citySelect.innerHTML = '';
       Object.entries(CITIES).forEach(([key, city]) => {
-        const pill = document.createElement('button');
-        pill.className = 'city-pill' + (key === currentCity ? ' active' : '');
-        pill.textContent = city.name;
-        pill.onclick = () => switchCity(key);
-        cityBar.appendChild(pill);
+        const opt = document.createElement('option');
+        opt.value = key;
+        opt.textContent = city.name;
+        if (key === currentCity) opt.selected = true;
+        citySelect.appendChild(opt);
       });
     }
-    buildCityPills();
+    buildCitySelect();
+    citySelect.addEventListener('change', () => switchCity(citySelect.value));
 
     function switchCity(key) {
       if (key === currentCity) return;
@@ -595,11 +642,12 @@
       document.getElementById('destLabelIdle').textContent = 'Search or tap map for destination';
       document.getElementById('destLabelIdle').className = 'loc-label placeholder';
       showState('stateIdle');
-      buildCityPills();
+      buildCitySelect();
+      citySelect.value = key;
     }
 
     fetch('/api/config').then(r => r.json()).then(cfg => {
-      if (cfg.cities) { CITIES = cfg.cities; buildCityPills(); }
+      if (cfg.cities) { CITIES = cfg.cities; buildCitySelect(); }
     }).catch(() => {});
 
     let origin = null, dest = null;
@@ -623,14 +671,8 @@
       repositionLocateBtn();
     }
 
-    function repositionLocateBtn() {
-      const sheet = document.getElementById('sheet');
-      const btn = document.getElementById('btnLocate');
-      const h = sheet.offsetHeight;
-      btn.style.bottom = (h + 14) + 'px';
-    }
-    window.addEventListener('resize', repositionLocateBtn);
-    setTimeout(repositionLocateBtn, 100);
+    function repositionLocateBtn() { /* fixed position — no resize needed */ }
+    setTimeout(function() { if (map && map.invalidateSize) map.invalidateSize(); }, 300);
 
     function updateIdleHint() {
       const hint = document.getElementById('idleHint');
@@ -685,7 +727,10 @@
     }
 
     document.getElementById('btnShareLocation').onclick = () => shareLocation();
-    document.getElementById('btnLocate').onclick = () => shareLocation();
+    document.getElementById('btnLocate').onclick = () => {
+      document.querySelector('.map-wrap')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      shareLocation();
+    };
 
     function placeOrigin(latlng) {
       if (originMarker) map.removeLayer(originMarker);
@@ -880,11 +925,11 @@
         if (originConnector) { map.removeLayer(originConnector); originConnector = null; }
         if (destConnector) { map.removeLayer(destConnector); destConnector = null; }
 
-        routeLayer = L.polyline(latlngs, { color: '#fff', weight: 4, opacity: 0.8 }).addTo(map);
+        routeLayer = L.polyline(latlngs, { color: '#2563eb', weight: 4, opacity: 0.85 }).addTo(map);
 
         const routeStart = latlngs[0];
         const routeEnd = latlngs[latlngs.length - 1];
-        const connectorStyle = { color: '#aaa', weight: 2, dashArray: '4,6', opacity: 0.5 };
+        const connectorStyle = { color: '#94a3b8', weight: 2, dashArray: '4,6', opacity: 0.6 };
         if (origin && haversine(origin, routeStart) > 5) {
           originConnector = L.polyline([origin, routeStart], connectorStyle).addTo(map);
         }
@@ -974,7 +1019,7 @@
         if (data.routes) {
           [approachLayer, escortLayer, returnLayer].forEach(l => { if (l) map.removeLayer(l); });
           approachLayer = L.polyline(data.routes.approach, { color: '#666', weight: 2, dashArray: '6,4', opacity: 0.5 }).addTo(map);
-          escortLayer   = L.polyline(data.routes.escort,   { color: '#fff', weight: 3, opacity: 0.7 }).addTo(map);
+          escortLayer   = L.polyline(data.routes.escort,   { color: '#2563eb', weight: 3, opacity: 0.85 }).addTo(map);
           returnLayer   = L.polyline(data.routes['return'], { color: '#555', weight: 2, dashArray: '4,4', opacity: 0.3 }).addTo(map);
         }
 
@@ -995,6 +1040,19 @@
         `;
 
         showState('statePlanned');
+
+        btn.textContent = 'Launching drone...';
+        const startResp = await fetch('/api/mission/start', { method: 'POST' });
+        const startData = await startResp.json();
+        if (startData.detail) throw new Error(startData.detail);
+        missionActive = true;
+        showState('stateActive');
+        resetTimeline();
+        document.getElementById('droneText').textContent = startData.source === 'mock' ? 'Drone launched (sim)' : 'ArduPilot armed — drone launching';
+        document.getElementById('droneSub').textContent = '';
+        document.getElementById('liveBadge').style.display = 'none';
+        document.getElementById('statusText').textContent = 'Mission active';
+        startLiveTracking();
       } catch (e) {
         alert('Failed: ' + e.message);
       }
@@ -1088,6 +1146,7 @@
         } else if (msg.type === 'agent_update') {
           const hs = msg.helpstral || {};
           const tl = hs.threat_level || 1;
+          const status = hs.status || 'SAFE';
           const sub = document.getElementById('droneSub');
           if (document.getElementById('stateActive').style.display !== 'none' && sub) {
             if (tl >= 8) {
@@ -1100,6 +1159,8 @@
               sub.style.color = '';
             }
           }
+          const helEl = document.getElementById('helpstralStatus');
+          if (helEl) helEl.textContent = 'Helpstral: ' + status + ' (threat ' + tl + '/10) — ' + (hs.action || 'Monitoring');
         } else if (msg.type === 'phase') {
           if (document.getElementById('stateActive').style.display !== 'none') {
             document.getElementById('droneText').textContent = phaseLabel(msg.phase);
