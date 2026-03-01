@@ -57,7 +57,7 @@ The agent loop only runs when a real camera frame is present. Images smaller tha
 
 ### Flystral — [BenBarr/flystral](https://huggingface.co/BenBarr/flystral)
 
-LoRA adapter trained on 1,000 RGB drone flight frames from the [AirSim Drone Flight 10K dataset](https://www.kaggle.com/datasets/lukpellant/droneflight-obs-avoidanceairsimrgbdepth10k-320x320) (320×320 images paired with telemetry arrays).
+LoRA adapter trained on 1,000 RGB drone flight frames from the [AirSim Drone Flight 10K dataset](https://www.kaggle.com/datasets/lukpellant/droneflight-obs-avoidanceairsimrgbdepth10k-320x320). Each frame is paired with its 4-value command array `[vx, vy, vz, yaw_rate]` from AirSim's obstacle avoidance controller. Data pairing is validated in-notebook — all training arrays have shape `(4,)` from the `commands/` directory (see [`flystral_training.ipynb`](flystral_training.ipynb) cell 7).
 
 | Parameter | Value |
 |-----------|-------|
@@ -77,20 +77,27 @@ Step 192:   7.0885    Step 448:  1.9873
 Step 256:   4.6498    Step 500:  1.7251
 ```
 
+**Eval evidence:** Fine-tuned Flystral outputs raw comma-separated floats (`2.4312, 0.0089, -0.0034, -1.2847`) which parse directly as `vx, vy, vz, yaw_rate` — values in the expected AirSim normalised range. Base Ministral 3B given the same prompt refuses: *"I don't have access to telemetry data."* Post-training inference test in [`flystral_training.ipynb`](flystral_training.ipynb) cell 18; serve notebook test in [`flystral/serve_colab.ipynb`](flystral/serve_colab.ipynb) cell 5. Full comparison in [`FINETUNING.md`](FINETUNING.md).
+
 ### Helpstral — [BenBarr/helpstral](https://huggingface.co/BenBarr/helpstral)
 
 LoRA fine-tuned Pixtral 12B for structured safety assessment from drone camera images.
 
 | Parameter | Value |
 |-----------|-------|
-| Base model | Pixtral 12B (Unsloth 4-bit) |
-| Method | LoRA — r=64, α=128, 7 target modules |
+| Base model | `unsloth/pixtral-12b-2409-bnb-4bit` (Pixtral 12B, 4-bit) |
+| Method | LoRA — r=64, α=128, all attention + MLP layers via Unsloth |
+| Training data | 200 annotated drone frames with structured safety JSON |
+| Training | 3 epochs, lr=2e-4, Colab T4 (~45 min), final loss 0.62 |
 | Output | `threat_level`, `status`, `people_count`, `user_moving`, `proximity_alert`, `observations`, `pattern`, `reasoning`, `action` |
 | Inference latency | 1.8–2.4s median, ~3.1s p95 (within 5s loop) |
 | Adapter config | [`helpstral/pixtral-helpstral-final/adapter_config.json`](helpstral/pixtral-helpstral-final/adapter_config.json) |
+| Training notebook | [`helpstral/train_colab.ipynb`](helpstral/train_colab.ipynb) — full training log, inference test, HF push |
 | Inference server | [`helpstral.ipynb`](helpstral.ipynb) / [`helpstral/serve_colab.ipynb`](helpstral/serve_colab.ipynb) |
 
 Higher LoRA rank (64 vs Flystral's 4) is warranted: safety assessment requires nuanced multi-class reasoning across people, motion, lighting, and history. Flystral predicts a narrow telemetry vector; Helpstral reasons about human safety.
+
+**Eval evidence:** Fine-tuned Helpstral produces valid 9-key JSON in the exact schema on first inference. Base Pixtral 12B produces free-form text descriptions. See [`helpstral/train_colab.ipynb`](helpstral/train_colab.ipynb) cell 6 and [`FINETUNING.md`](FINETUNING.md) for full before/after comparison.
 
 Both models are served from Colab T4 GPUs via ngrok. Neither has a base-model fallback — if an endpoint is not set, the server returns `endpoint_required` and logs the skip.
 
@@ -224,14 +231,15 @@ app/partner/index.html                 Mission control — live map, camera, tel
 
 helpstral/agent.py                     Threat monitor — Pixtral 12B, 3 tools, temporal pattern detection
 helpstral/pixtral-helpstral-final/     LoRA adapter config (adapter_config.json — r=64, α=128)
+helpstral/train_colab.ipynb            Training — Unsloth, loss trace, inference test, HF push
 helpstral/serve_colab.ipynb            Helpstral inference server (BenBarr/helpstral via ngrok)
 helpstral.ipynb                        Helpstral inference server (root-level)
 
 flystral/agent.py                      Flight controller — Ministral 3B, 3 tools, velocity output
 flystral/ministral-drone-final/        LoRA adapter config + tokenizer (adapter_config.json in repo)
-flystral/train_colab.ipynb             Training — full loss trace, dataset build, HF push
+flystral/train_colab.ipynb             Training — data validation, loss trace, eval test, HF push
 flystral/serve_colab.ipynb             Flystral inference server (BenBarr/flystral via ngrok)
-flystral_training.ipynb                Training notebook (root-level)
+flystral_training.ipynb                Training notebook (root-level copy)
 
 louise/agent.py                        Conversational companion — Ministral 3B, 4 tools, OSM data
 
