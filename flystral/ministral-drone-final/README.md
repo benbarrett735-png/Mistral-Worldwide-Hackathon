@@ -1,199 +1,109 @@
 ---
 library_name: transformers
-tags: []
+tags:
+  - lora
+  - peft
+  - drone
+  - telemetry
+  - vision
+  - mistral
+  - ministral
+base_model: mistralai/Ministral-3-3B-Instruct-2512-BF16
+license: apache-2.0
+pipeline_tag: image-text-to-text
 ---
 
-# Model Card for Model ID
+# Flystral — LoRA Fine-tuned Ministral 3B for Drone Flight Control
 
-<!-- Provide a quick summary of what the model is/does. -->
+LoRA adapter for real-time drone telemetry prediction from camera images, built for the [Louise AI Safety Drone Escort](https://github.com/BenBarr/louise) system.
 
+## What it does
 
+Given a drone camera frame, the model outputs a telemetry vector (velocity, orientation, altitude adjustments) that drives autonomous flight control. This enables the drone to react to visual obstacles and environmental conditions in real-time during pedestrian escort missions.
 
-## Model Details
+## Training
 
-### Model Description
+| Parameter | Value |
+|-----------|-------|
+| Base model | `mistralai/Ministral-3-3B-Instruct-2512-BF16` |
+| Method | LoRA (PEFT) |
+| LoRA rank (r) | 4 |
+| LoRA alpha | 8 |
+| Target modules | `q_proj`, `v_proj` |
+| Task type | CAUSAL_LM |
+| Steps | 500 |
+| Learning rate | 2e-4 |
+| Gradient accumulation | 8 |
+| Grad clipping | 0.3 |
+| Precision | bfloat16 |
+| Hardware | Google Colab T4 GPU (15 GB VRAM) |
+| Training time | ~35 minutes |
+| PEFT version | 0.18.1 |
 
-<!-- Provide a longer summary of what this model is. -->
+### Dataset
 
-This is the model card of a 🤗 transformers model that has been pushed on the Hub. This model card has been automatically generated.
+[AirSim RGB+Depth Drone Flight 10K](https://www.kaggle.com/datasets/lukpellant/droneflight-obs-avoidanceairsimrgbdepth10k-320x320) — 1,000 RGB frames (320×320) from Microsoft AirSim simulator, each paired with a numpy telemetry array containing velocity/orientation data.
 
-- **Developed by:** Ben Barrett
-- **Funded by [optional]:** [More Information Needed]
-- **Shared by [optional]:** [More Information Needed]
-- **Model type:** Ministral 3 3B
-- **Language(s) (NLP):** [More Information Needed]
-- **License:** [More Information Needed]
-- **Finetuned from model [optional]:** [More Information Needed]
+Each training example pairs a drone camera image with a telemetry vector (50 float values) representing the drone's state. The model learns to predict these vectors from visual input.
 
-### Model Sources [optional]
+### Training loss
 
-<!-- Provide the basic links for the model. -->
+```
+Step  64/500  loss=10.6414
+Step 128/500  loss=9.5537
+Step 192/500  loss=7.0885
+Step 256/500  loss=4.6498
+Step 320/500  loss=3.1225
+Step 384/500  loss=2.4410
+Step 448/500  loss=1.9873
+Step 500/500  loss=1.7251
+```
 
-- **Repository:** [More Information Needed]
-- **Paper [optional]:** [More Information Needed]
-- **Demo [optional]:** [More Information Needed]
+Loss decreased from 10.6 → 1.7 over 500 steps, confirming the adapter learned to map visual features to telemetry predictions.
 
-## Uses
+## Usage
 
-Drone telemetray for autonomous flying
+```python
+import torch
+from transformers import AutoProcessor, Mistral3ForConditionalGeneration
+from peft import PeftModel
+from PIL import Image
 
-### Direct Use
+processor = AutoProcessor.from_pretrained("mistralai/Ministral-3-3B-Instruct-2512-BF16")
+model = Mistral3ForConditionalGeneration.from_pretrained(
+    "mistralai/Ministral-3-3B-Instruct-2512-BF16",
+    torch_dtype=torch.bfloat16,
+)
+model = PeftModel.from_pretrained(model, "BenBarr/flystral")
+model = model.merge_and_unload().cuda().eval()
 
-<!-- This section is for the model use without fine-tuning or plugging into a larger ecosystem/app. -->
+img = Image.open("drone_frame.jpg").convert("RGB")
 
-[More Information Needed]
+messages = [{"role": "user", "content": [
+    {"type": "image"},
+    {"type": "text", "text": "Output the raw telemetry for this frame."},
+]}]
 
-### Downstream Use [optional]
+text = processor.apply_chat_template(messages, add_generation_prompt=True)
+inputs = processor(text=text, images=[img], return_tensors="pt").to("cuda")
 
-<!-- This section is for the model use when fine-tuned for a task, or when plugged into a larger ecosystem/app -->
+with torch.no_grad():
+    output_ids = model.generate(**inputs, max_new_tokens=200, do_sample=False)
 
-[More Information Needed]
+result = processor.decode(output_ids[0][inputs["input_ids"].shape[-1]:], skip_special_tokens=True)
+print(result)  # Telemetry vector: vx, vy, vz, yaw_rate, ...
+```
 
-### Out-of-Scope Use
+## Architecture
 
-<!-- This section addresses misuse, malicious use, and uses that the model will not work well for. -->
+The adapter sits in the Louise multi-agent drone escort system:
 
-[More Information Needed]
+- **Flystral** (this model) — flight control from camera images
+- **Helpstral** — safety/threat assessment from camera images (Pixtral 12B)
+- **Louise** — conversational safety companion (Ministral 3B)
 
-## Bias, Risks, and Limitations
+When the fine-tuned endpoint is available, Flystral uses this adapter. When offline, it falls back to agentic mode on the base Ministral 3B via the Mistral API with function calling.
 
-<!-- This section is meant to convey both technical and sociotechnical limitations. -->
+## Developed by
 
-[More Information Needed]
-
-### Recommendations
-
-<!-- This section is meant to convey recommendations with respect to the bias, risk, and technical limitations. -->
-
-Users (both direct and downstream) should be made aware of the risks, biases and limitations of the model. More information needed for further recommendations.
-
-## How to Get Started with the Model
-
-Use the code below to get started with the model.
-
-[More Information Needed]
-
-## Training Details
-
-### Training Data
-
-<!-- This should link to a Dataset Card, perhaps with a short stub of information on what the training data is all about as well as documentation related to data pre-processing or additional filtering. -->
-
-[More Information Needed]
-
-### Training Procedure
-
-<!-- This relates heavily to the Technical Specifications. Content here should link to that section when it is relevant to the training procedure. -->
-
-#### Preprocessing [optional]
-
-[More Information Needed]
-
-
-#### Training Hyperparameters
-
-- **Training regime:** [More Information Needed] <!--fp32, fp16 mixed precision, bf16 mixed precision, bf16 non-mixed precision, fp16 non-mixed precision, fp8 mixed precision -->
-
-#### Speeds, Sizes, Times [optional]
-
-<!-- This section provides information about throughput, start/end time, checkpoint size if relevant, etc. -->
-
-[More Information Needed]
-
-## Evaluation
-
-<!-- This section describes the evaluation protocols and provides the results. -->
-
-### Testing Data, Factors & Metrics
-
-#### Testing Data
-
-<!-- This should link to a Dataset Card if possible. -->
-
-[More Information Needed]
-
-#### Factors
-
-<!-- These are the things the evaluation is disaggregating by, e.g., subpopulations or domains. -->
-
-[More Information Needed]
-
-#### Metrics
-
-<!-- These are the evaluation metrics being used, ideally with a description of why. -->
-
-[More Information Needed]
-
-### Results
-
-[More Information Needed]
-
-#### Summary
-
-
-
-## Model Examination [optional]
-
-<!-- Relevant interpretability work for the model goes here -->
-
-[More Information Needed]
-
-## Environmental Impact
-
-<!-- Total emissions (in grams of CO2eq) and additional considerations, such as electricity usage, go here. Edit the suggested text below accordingly -->
-
-Carbon emissions can be estimated using the [Machine Learning Impact calculator](https://mlco2.github.io/impact#compute) presented in [Lacoste et al. (2019)](https://arxiv.org/abs/1910.09700).
-
-- **Hardware Type:** [More Information Needed]
-- **Hours used:** [More Information Needed]
-- **Cloud Provider:** [More Information Needed]
-- **Compute Region:** [More Information Needed]
-- **Carbon Emitted:** [More Information Needed]
-
-## Technical Specifications [optional]
-
-### Model Architecture and Objective
-
-[More Information Needed]
-
-### Compute Infrastructure
-
-[More Information Needed]
-
-#### Hardware
-
-[More Information Needed]
-
-#### Software
-
-[More Information Needed]
-
-## Citation [optional]
-
-<!-- If there is a paper or blog post introducing the model, the APA and Bibtex information for that should go in this section. -->
-
-**BibTeX:**
-
-[More Information Needed]
-
-**APA:**
-
-[More Information Needed]
-
-## Glossary [optional]
-
-<!-- If relevant, include terms and calculations in this section that can help readers understand the model or model card. -->
-
-[More Information Needed]
-
-## More Information [optional]
-
-[More Information Needed]
-
-## Model Card Authors [optional]
-
-[More Information Needed]
-
-## Model Card Contact
-
-[More Information Needed]
+Ben Barrett — Mistral Worldwide Hackathon 2026

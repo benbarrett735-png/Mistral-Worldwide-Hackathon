@@ -2,7 +2,7 @@
 
 **A multi-agent system that dispatches a drone to escort people walking alone at night, powered by three coordinated Mistral AI agents.**
 
-Built for the Mistral Worldwide Hackathon 2025.
+Built for the Mistral Worldwide Hackathon 2026.
 
 ---
 
@@ -30,8 +30,9 @@ The system is designed around the EU's sub-250g drone category (EASA Open Catego
 | **Flystral** | [Fine-tuned Ministral 3B](https://huggingface.co/BenBarr/flystral) | Controls the drone's flight. Queries telemetry, Helpstral's threat assessment, and route progress via function calling. Balances four competing priorities: user protection, battery conservation, camera coverage, and user comfort |
 | **Louise** | Ministral 3B | Conversational AI the user can chat with during their walk. Answers questions about route safety using real geo-intelligence data (streetlights, neighbourhood info, POI density from OpenStreetMap) |
 
-4. **Escalation** — If Helpstral detects threat_level >= 6 for 3 consecutive assessments, the system auto-escalates: emergency alerts fire, the drone drops to 5-8m hover directly above the user, and emergency services can be notified
-5. **Arrival** — When the user reaches their destination, the drone returns to the hub autonomously
+4. **Operator review** — Helpstral reports body detection (people count, proximity alerts, user movement status) every frame. If the user stops moving for 10+ seconds or another person is detected within ~3m, mission control receives an operator review alert with full context. The operator can escalate to emergency or dismiss — keeping a human in the loop for critical safety decisions
+5. **Escalation** — If Helpstral detects threat_level >= 6 for 3 consecutive assessments, the system auto-escalates: emergency alerts fire, the drone drops to 5-8m hover directly above the user, and emergency services can be notified. Helpstral and Louise can also escalate directly via their `escalate_emergency` tool, which broadcasts immediately to mission control
+6. **Arrival** — When the user reaches their destination, the drone returns to the hub autonomously
 
 ---
 
@@ -69,7 +70,9 @@ This is not prompt engineering wrapped in an API. Each agent uses Mistral's func
 - `get_area_info` — reverse geocoding + neighbourhood POI density
 - `get_safety_tips` — context-aware safety recommendations
 
-The autonomous loop runs every 5 seconds without human triggering. Helpstral analyses the frame, Flystral adapts the flight, and if threats persist across 3+ consecutive assessments, auto-escalation fires independently.
+The autonomous loop runs every 5 seconds without human triggering. Helpstral analyses the frame, Flystral adapts the flight, and if threats persist across 3+ consecutive assessments, auto-escalation fires independently. When agents call `escalate_emergency`, the server broadcasts to mission control in real-time — the tool promise is fulfilled end-to-end.
+
+**Operator-in-the-loop** — Helpstral outputs structured body detection data (`people_count`, `user_moving`, `proximity_alert`) every frame. The server tracks these over time: if the user stops moving for 10+ seconds or another person enters close proximity, an operator review alert fires to mission control with approve/dismiss controls. This keeps safety-critical decisions human-supervised while the AI handles continuous monitoring.
 
 ---
 
@@ -141,7 +144,8 @@ louise/agent.py                   Conversational AI — 4 tools, real geo-intell
 
 autopilot_adapter/
   waypoint_generator.py           3-phase waypoint generation from walking routes
-  mavlink_connector.py            ArduPilot GUIDED-mode flight via MAVLink
+  mavlink_connector.py            ArduPilot GUIDED-mode flight via MAVLink (SITL + real hardware)
+  camera_stream.py                Live camera feed from drone to server (companion computer)
   mock_simulator.py               Async drone simulator for testing without ArduPilot
 ```
 
@@ -156,5 +160,27 @@ Louise supports deployment across European cities. Each city has a configured dr
 | Paris | Louvre | Active |
 | Dublin | Trinity College | Active |
 | London | Buckingham Palace | Active |
+| Kilcoole, Wicklow | Kilcoole village | Active (demo site) |
 
-The system uses real OSRM routing, real OpenStreetMap data, and real ArduPilot SITL simulation per city. Switching cities relocates the SITL instance and reconfigures the geofence automatically.
+The system uses real OSRM routing, real OpenStreetMap data, and real ArduPilot flight control per city. Switching cities relocates the drone hub and reconfigures the geofence automatically.
+
+### Real hardware support
+
+Louise is designed for both simulation and real drone hardware. Set `MAV_CONNECTION` in `.env` to connect to a real ArduPilot flight controller:
+
+```bash
+# WiFi telemetry
+MAV_CONNECTION=tcp:192.168.1.10:5760
+
+# USB telemetry radio
+MAV_CONNECTION=serial:/dev/ttyUSB0:57600
+
+# MAVProxy UDP
+MAV_CONNECTION=udp:0.0.0.0:14550
+```
+
+The companion camera streamer (`autopilot_adapter/camera_stream.py`) captures live video from the drone's onboard camera and feeds it to Helpstral and Flystral for real-time vision analysis:
+
+```bash
+python autopilot_adapter/camera_stream.py --server http://localhost:8000 --device 0
+```

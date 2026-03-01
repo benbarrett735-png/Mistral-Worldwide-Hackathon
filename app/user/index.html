@@ -554,6 +554,13 @@
             <div class="tl-speed" id="tlSpeedReturn"></div>
           </div>
         </div>
+        <div id="demoVideoContainer" style="display:none;margin:10px 0;border-radius:12px;overflow:hidden;background:#000">
+          <video id="demoVideo" style="width:100%;border-radius:12px" muted playsinline></video>
+          <div style="padding:6px 10px;background:rgba(0,0,0,0.7);color:#fff;font-size:0.7rem;display:flex;align-items:center;gap:6px">
+            <span class="pulse-dot" style="position:static;width:6px;height:6px"></span>
+            <span>Live drone camera feed</span>
+          </div>
+        </div>
         <button class="btn btn-danger" id="btnDistress">I need help</button>
         <button class="btn btn-primary" id="btnArrived">I've arrived safely</button>
         <button class="btn btn-outline" id="btnCancel">Cancel escort</button>
@@ -571,7 +578,7 @@
   </div>
 
   <div class="helpstral-section" id="helpstralSection">
-    <div class="helpstral-section-title">Helpstral Safety Monitor</div>
+    <div class="helpstral-section-title"><img src="/user/helpstral.png" alt="" style="width:20px;height:20px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:6px">Helpstral Safety Monitor</div>
     <p>Helpstral is our vision AI that runs on the drone camera feed during your escort. It watches for unusual activity, people following, or changes in the environment. When it detects a potential threat, it can lower the drone to stay closer, trigger an alert to mission control, or adjust the flight path.</p>
     <p>During an active escort, Helpstral assessments are streamed in real time. Threat levels range from SAFE (1–4) to CAUTION (5–7) to DISTRESS (8–10). Three consecutive high-threat readings trigger an automatic emergency alert.</p>
     <div class="helpstral-status" id="helpstralStatus">No active escort — Helpstral will activate when your drone is in flight.</div>
@@ -1174,6 +1181,12 @@
             document.getElementById('droneSub').textContent = '';
             startLiveTracking();
           }
+        } else if (msg.type === 'demo_mode' && msg.active && msg.video) {
+          var vc = document.getElementById('demoVideoContainer');
+          var vid = document.getElementById('demoVideo');
+          vid.src = '/demo_video/flight.mp4';
+          vid.play().catch(function(){});
+          vc.style.display = '';
         } else if (msg.type === 'sitl_status') {
           if (document.getElementById('statePlanned').style.display !== 'none' ||
               document.getElementById('stateActive').style.display !== 'none') {

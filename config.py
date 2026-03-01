@@ -52,6 +52,15 @@ CITY_HUBS = {
         "viewbox": "-0.30,51.60,0.10,51.40",
         "zoom": 13,
     },
+    "kilcoole": {
+        "name": "Kilcoole (Demo Site)",
+        "hub": {"lat": 53.1076, "lng": -6.0483, "label": "Louise Drone Centre — Kilcoole, Wicklow (Demo Site)"},
+        "center": {"lat": 53.1076, "lng": -6.0483},
+        "bounds": {"lat_min": 53.07, "lat_max": 53.14, "lng_min": -6.12, "lng_max": -6.00},
+        "country": "ie",
+        "viewbox": "-6.12,53.14,-6.00,53.07",
+        "zoom": 15,
+    },
 }
 
 DEFAULT_CITY = os.getenv("DEFAULT_CITY", "paris")

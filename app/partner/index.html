@@ -239,6 +239,25 @@
       font-family: 'JetBrains Mono', monospace;
     }
 
+    .operator-review {
+      display: none; background: #fffbeb; border: 2px solid #f59e0b; border-radius: 8px;
+      padding: 14px 16px; margin: 8px 12px; flex-shrink: 0; animation: pulse-border 1.5s infinite;
+    }
+    @keyframes pulse-border { 0%,100%{border-color:#f59e0b} 50%{border-color:#dc2626} }
+    .or-header { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+    .or-icon { width: 28px; height: 28px; border-radius: 50%; background: #f59e0b; color: #fff;
+      display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 1rem; flex-shrink: 0; }
+    .or-title { font-weight: 700; font-size: 0.82rem; color: #92400e; }
+    .or-subtitle { font-size: 0.68rem; color: #b45309; }
+    .or-detail { font-size: 0.68rem; color: #78350f; line-height: 1.5; margin-bottom: 10px; }
+    .or-actions { display: flex; gap: 8px; }
+    .or-btn { flex: 1; padding: 8px 12px; border-radius: 6px; font-weight: 600; font-size: 0.72rem;
+      cursor: pointer; border: none; font-family: 'Inter', sans-serif; transition: opacity 0.2s; }
+    .or-btn:hover { opacity: 0.85; }
+    .or-btn-danger { background: #dc2626; color: #fff; }
+    .or-btn-safe { background: #059669; color: #fff; }
+    .or-timer { font-size: 0.58rem; color: #9ca3af; text-align: right; margin-top: 6px; }
+
     .emergency-banner {
       display: none; background: #fef2f2; padding: 10px 16px; border-top: 2px solid #dc2626;
       text-align: center; font-size: 0.82rem; font-weight: 700; color: #dc2626;
@@ -253,8 +272,8 @@
   <div class="left-col">
     <div id="map"></div>
     <div class="ardupilot-panel">
-      <div class="ap-header">ArduPilot SITL <button id="apShowCamBtn" onclick="showCamQuadrant()" style="display:none;margin-left:auto;background:#22c55e;color:#fff;border:none;padding:2px 8px;border-radius:3px;font-size:0.58rem;font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace">Camera &raquo;</button></div>
-      <div class="ap-hint">tcp:127.0.0.1:5760</div>
+      <div class="ap-header"><span id="apHeaderTitle">ArduPilot</span> <button id="apShowCamBtn" onclick="showCamQuadrant()" style="display:none;margin-left:auto;background:#22c55e;color:#fff;border:none;padding:2px 8px;border-radius:3px;font-size:0.58rem;font-weight:600;cursor:pointer;font-family:'JetBrains Mono',monospace">Camera &raquo;</button></div>
+      <div class="ap-hint" id="apHint">Connecting...</div>
       <div class="ap-status">
         <label>Mode</label><span id="apMode">—</span>
         <label>Armed</label><span id="apArmed">—</span>
@@ -272,8 +291,8 @@
     <!-- Camera quadrant: replaces AP panel when live -->
     <div class="cam-quadrant" id="camQuadrant">
       <div class="cam-quad-header">
-        <button class="cam-tab active" id="camTabHelpstral" onclick="switchCamTab('helpstral')">Helpstral<span class="cam-tab-badge"></span></button>
-        <button class="cam-tab" id="camTabFlystral" onclick="switchCamTab('flystral')">Flystral</button>
+        <button class="cam-tab active" id="camTabHelpstral" onclick="switchCamTab('helpstral')"><img src="/partner/helpstral.png" alt="" style="width:16px;height:16px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:4px">Helpstral<span class="cam-tab-badge"></span></button>
+        <button class="cam-tab" id="camTabFlystral" onclick="switchCamTab('flystral')"><img src="/partner/flystral.png" alt="" style="width:16px;height:16px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:4px">Flystral</button>
         <button class="cam-quad-btn" id="camQuadShowLogs" onclick="hideCamQuadrant()" title="Show ArduPilot logs">Logs &raquo;</button>
       </div>
       <div class="cam-quad-body">
@@ -357,13 +376,13 @@
         <div class="sec-body">
           <div class="ai-row">
             <div class="ai-mini" id="hsCard">
-              <div class="ai-mini-name">Helpstral</div>
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><img src="/partner/helpstral.png" alt="" style="width:22px;height:22px;border-radius:50%;object-fit:cover"><div class="ai-mini-name" style="margin:0">Helpstral</div></div>
               <div class="ai-mini-val" id="hsValue">—</div>
               <div class="ai-mini-sub" id="hsDetail">No feed</div>
               <div id="hsReasoning" style="font-size:0.58rem;color:#6b7280;margin-top:4px;display:none;line-height:1.4"></div>
             </div>
             <div class="ai-mini" id="fsCard">
-              <div class="ai-mini-name">Flystral</div>
+              <div style="display:flex;align-items:center;gap:6px;margin-bottom:4px"><img src="/partner/flystral.png" alt="" style="width:22px;height:22px;border-radius:50%;object-fit:cover"><div class="ai-mini-name" style="margin:0">Flystral</div></div>
               <div class="ai-mini-val" id="fsValue">—</div>
               <div class="ai-mini-sub" id="fsDetail">No data</div>
               <div id="fsReasoning" style="font-size:0.58rem;color:#6b7280;margin-top:4px;display:none;line-height:1.4"></div>
@@ -466,6 +485,21 @@
 
     </div><!-- .panel-scroll -->
 
+    <div class="operator-review" id="operatorReview">
+      <div class="or-header">
+        <div class="or-icon">!</div>
+        <div>
+          <div class="or-title" id="orTitle">Operator Review Required</div>
+          <div class="or-subtitle" id="orSubtitle">Situation flagged by AI</div>
+        </div>
+      </div>
+      <div class="or-detail" id="orDetail"></div>
+      <div class="or-actions">
+        <button class="or-btn or-btn-danger" onclick="operatorRespond('approve')">Escalate Emergency</button>
+        <button class="or-btn or-btn-safe" onclick="operatorRespond('dismiss')">Situation Safe</button>
+      </div>
+      <div class="or-timer" id="orTimer"></div>
+    </div>
     <div class="emergency-banner" id="emergencyBanner">EMERGENCY — USER DISTRESS DETECTED</div>
     <div id="arrivalBanner" style="display:none;position:fixed;top:0;left:0;right:0;z-index:9999;background:#059669;color:#fff;padding:12px 16px;font-size:13px;text-align:center;box-shadow:0 2px 8px rgba(0,0,0,0.2)"></div>
   </div>
@@ -512,8 +546,13 @@
   // ── WebSocket ──
   function connect(){const proto=location.protocol==='https:'?'wss':'ws';const ws=new WebSocket(`${proto}://${location.host}/ws`);const dot=document.getElementById('wsDot');ws.onopen=()=>{dot.classList.add('connected');addLog('Connected');if(window._wsPingInterval)clearInterval(window._wsPingInterval);window._wsPingInterval=setInterval(()=>{if(ws.readyState===1)ws.send(JSON.stringify({type:'ping'}))},20000)};ws.onmessage=e=>handleEvent(JSON.parse(e.data));ws.onclose=()=>{dot.classList.remove('connected');if(window._wsPingInterval){clearInterval(window._wsPingInterval);window._wsPingInterval=null}addLog('Disconnected','warn');if(!window._wsReconnecting){window._wsReconnecting=true;setTimeout(()=>{window._wsReconnecting=false;connect()},3000)}}}
   connect();
+  fetch('/api/config').then(r=>r.json()).then(cfg=>{
+    const hw=cfg.connection_mode==='hardware';
+    document.getElementById('apHeaderTitle').textContent=hw?'ArduPilot (Hardware)':'ArduPilot SITL';
+    document.getElementById('apHint').textContent=cfg.mav_connection||'tcp:127.0.0.1:5760';
+  }).catch(()=>{document.getElementById('apHint').textContent='tcp:127.0.0.1:5760'});
 
-  function handleEvent(msg){switch(msg.type){case'mission_update':handleMissionUpdate(msg);break;case'mission_started':handleMissionStarted(msg);break;case'sitl_status':handleSitlStatus(msg);break;case'position':if(msg.source==='hub_reset')break;updateDrone(msg);updateTelemetry(msg);if(msg.phase&&msg.phase!==currentPhase)handlePhaseChange(msg.phase);break;case'phase':handlePhaseChange(msg.phase);break;case'connector_died':handleConnectorDied();break;case'complete':handleComplete();break;case'user_arrived':handleUserArrived(msg);break;case'emergency':handleEmergency(msg);break;case'sitl_log':addLog(msg.message);appendArduPilotConsole(msg.message);break;case'flystral':handleFlystral(msg);break;case'agent_update':handleAgentUpdate(msg);break;case'user_position':if(msg.source==='demo')updateDemoUser(msg);break;case'pong':break}}
+  function handleEvent(msg){switch(msg.type){case'mission_update':handleMissionUpdate(msg);break;case'mission_started':handleMissionStarted(msg);break;case'sitl_status':handleSitlStatus(msg);break;case'position':if(msg.source==='hub_reset')break;updateDrone(msg);updateTelemetry(msg);if(msg.phase&&msg.phase!==currentPhase)handlePhaseChange(msg.phase);break;case'phase':handlePhaseChange(msg.phase);break;case'connector_died':handleConnectorDied();break;case'complete':handleComplete();break;case'user_arrived':handleUserArrived(msg);break;case'emergency':handleEmergency(msg);break;case'operator_review':handleOperatorReview(msg);break;case'operator_review_resolved':hideOperatorReview();break;case'sitl_log':addLog(msg.message);appendArduPilotConsole(msg.message);break;case'flystral':handleFlystral(msg);break;case'agent_update':handleAgentUpdate(msg);break;case'user_position':if(msg.source==='demo')updateDemoUser(msg);break;case'demo_mode':handleDemoMode(msg);break;case'pong':break}}
 
   function handleMissionUpdate(msg){
     hasMission=true;addLog('Mission received');
@@ -668,6 +707,16 @@
     setTimeout(()=>{if(droneMarker){map.removeLayer(droneMarker);droneMarker=null}},4000);
   }
 
+  function handleDemoMode(msg) {
+    if (msg.active && msg.video) {
+      showCamQuadrant();
+      const body = document.getElementById('camQuadBody');
+      body.innerHTML = '<video id="demoCamVideo" style="width:100%;height:100%;object-fit:cover;border-radius:6px" muted playsinline autoplay><source src="/demo_video/flight.mp4" type="video/mp4"></video>';
+      document.getElementById('demoCamVideo').play().catch(function(){});
+      addLog('Demo mode — playing drone camera footage');
+    }
+  }
+
   let helpstralInterval=null;
   let _activeCamTab = 'helpstral';
 
@@ -721,7 +770,7 @@
     resetCamQuadrant();
   }
 
-  async function getCameraFrameB64(){const video=document.getElementById('droneFeed');if(video.style.display!=='none'&&video.readyState>=2&&video.videoWidth>0){const c=document.createElement('canvas');c.width=video.videoWidth;c.height=video.videoHeight;c.getContext('2d').drawImage(video,0,0);return c.toDataURL('image/jpeg',0.7).split(',')[1]}try{const r=await fetch('/api/test-frame');const b=await r.blob();return await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result.split(',')[1]);fr.onerror=rej;fr.readAsDataURL(b)})}catch(_){return null}}
+  async function getCameraFrameB64(){const video=document.getElementById('droneFeed');if(video.style.display!=='none'&&video.readyState>=2&&video.videoWidth>0){const c=document.createElement('canvas');c.width=video.videoWidth;c.height=video.videoHeight;c.getContext('2d').drawImage(video,0,0);return c.toDataURL('image/jpeg',0.7).split(',')[1]}try{const r=await fetch('/api/camera/latest');if(r.status===204)return null;const b=await r.blob();return await new Promise((res,rej)=>{const fr=new FileReader();fr.onload=()=>res(fr.result.split(',')[1]);fr.onerror=rej;fr.readAsDataURL(b)})}catch(_){return null}}
 
   async function runHelpstral(){const b64=await getCameraFrameB64();if(!b64)return;try{const resp=await fetch('/api/agent-loop',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({image:b64})});const data=await resp.json();if(data.helpstral&&data.flystral)handleAgentUpdate({helpstral:data.helpstral,flystral:data.flystral});else{const hs=data.helpstral||data;setVisionAI('hs',hs.status==='DISTRESS'?'danger':'',hs.status||'SAFE');if(hs.status==='DISTRESS')addLog('Helpstral: DISTRESS','danger')}}catch{}}
 
@@ -752,6 +801,41 @@
   function handleUserArrived(msg){const b=document.getElementById('arrivalBanner');const auto=msg.auto?' (auto)':'';b.style.display='block';b.innerHTML=`<strong>USER ARRIVED SAFELY</strong>${auto} <button onclick="this.parentElement.style.display='none'" style="float:right;background:#fff;color:#059669;border:none;padding:3px 10px;border-radius:3px;cursor:pointer;font-weight:600">OK</button>`;addLog('User arrived safely');setBadge('escort','done');try{const ctx=new(window.AudioContext||window.webkitAudioContext)();const o=ctx.createOscillator();o.frequency.value=523;o.connect(ctx.destination);o.start();o.stop(ctx.currentTime+0.3)}catch(_){}}
 
   function handleEmergency(msg){const b=document.getElementById('emergencyBanner');b.style.display='block';const loc=(msg.lat&&msg.lng)?` at ${msg.lat.toFixed(5)},${msg.lng.toFixed(5)}`:'';b.innerHTML=`<strong>EMERGENCY</strong>${loc} <button onclick="this.parentElement.style.display='none'" style="float:right;background:#fff;color:#dc2626;border:1px solid #dc2626;padding:3px 10px;border-radius:3px;cursor:pointer;font-weight:600">ACK</button>`;setVisionAI('hs','danger','EMERGENCY');addLog('EMERGENCY'+loc,'danger');try{const ctx=new(window.AudioContext||window.webkitAudioContext)();for(let i=0;i<3;i++){const o=ctx.createOscillator();o.frequency.value=880;o.connect(ctx.destination);o.start(ctx.currentTime+i*0.3);o.stop(ctx.currentTime+i*0.3+0.15)}}catch(_){}}
+
+  let _currentReviewId=null;
+  let _reviewTimerInterval=null;
+  function handleOperatorReview(msg){
+    _currentReviewId=msg.id;
+    const card=document.getElementById('operatorReview');
+    const reasons={'user_stopped':'User has stopped moving','proximity_alert':'Another person detected near user'};
+    document.getElementById('orTitle').textContent='Operator Review Required';
+    document.getElementById('orSubtitle').textContent=reasons[msg.reason]||msg.reason;
+    let detail=`<strong>People detected:</strong> ${msg.people_count} &middot; <strong>User moving:</strong> ${msg.user_moving?'Yes':'No'}`;
+    if(msg.observations&&msg.observations.length)detail+=`<br>${msg.observations.join(' | ')}`;
+    if(msg.reasoning)detail+=`<br><em>${msg.reasoning}</em>`;
+    document.getElementById('orDetail').innerHTML=detail;
+    card.style.display='block';
+    addLog('OPERATOR REVIEW: '+msg.reason,'warn');
+    const startT=Date.now();
+    if(_reviewTimerInterval)clearInterval(_reviewTimerInterval);
+    _reviewTimerInterval=setInterval(()=>{const s=Math.round((Date.now()-startT)/1000);document.getElementById('orTimer').textContent=`Awaiting response... ${s}s`},1000);
+    try{const ctx=new(window.AudioContext||window.webkitAudioContext)();const o1=ctx.createOscillator();o1.frequency.value=660;o1.connect(ctx.destination);o1.start();o1.stop(ctx.currentTime+0.2);const o2=ctx.createOscillator();o2.frequency.value=880;o2.connect(ctx.destination);o2.start(ctx.currentTime+0.25);o2.stop(ctx.currentTime+0.45)}catch(_){}
+  }
+  function hideOperatorReview(){
+    document.getElementById('operatorReview').style.display='none';
+    _currentReviewId=null;
+    if(_reviewTimerInterval){clearInterval(_reviewTimerInterval);_reviewTimerInterval=null}
+  }
+  async function operatorRespond(action){
+    if(!_currentReviewId)return;
+    const rid=_currentReviewId;
+    try{
+      const resp=await fetch('/api/operator/review',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({review_id:rid,action:action})});
+      const data=await resp.json();
+      addLog(`Operator ${action}: ${data.message}`,action==='approve'?'danger':'info');
+      hideOperatorReview();
+    }catch(e){addLog('Operator response failed: '+e,'warn')}
+  }
 
   function drawRoutes(routes){const colors={approach:'#888',escort:'#111','return':'#aaa'};Object.entries(colors).forEach(([k,c])=>{if(routeLayers[k])map.removeLayer(routeLayers[k]);if(routes[k]&&routes[k].length)routeLayers[k]=L.polyline(routes[k],{color:c,weight:k==='escort'?3:2,dashArray:k==='escort'?null:'6,4',opacity:k==='escort'?0.9:0.5}).addTo(map)})}
 

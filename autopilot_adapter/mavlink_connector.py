@@ -1,15 +1,23 @@
 """
-Louise — MAVLink connector for ArduPilot SITL.
+Louise — MAVLink connector for ArduPilot (SITL and real hardware).
 
 Flies waypoints using GUIDED mode with SET_POSITION_TARGET_GLOBAL_INT,
 which is the official ArduCopter GUIDED mode position control method.
+Works identically with SITL simulation and real ArduPilot flight controllers.
+
+Connection examples:
+  SITL:     tcp:127.0.0.1:5760
+  WiFi FC:  tcp:192.168.1.10:5760
+  USB:      serial:/dev/ttyUSB0:57600
+  UDP:      udp:0.0.0.0:14550
 
 Flow:
-  1. Connect to SITL TCP 5760 (after MAVProxy is killed to free the port)
+  1. Connect to ArduPilot via MAVLink (SITL or real FC)
   2. Arm in GUIDED mode, take off
   3. Fly to each waypoint using SET_POSITION_TARGET_GLOBAL_INT
   4. Stream position telemetry to stdout as JSON lines
-  5. RTL when mission complete
+  5. Accept live Flystral velocity commands via stdin for obstacle avoidance
+  6. RTL when mission complete
 """
 
 from __future__ import annotations
@@ -141,6 +149,28 @@ def fly_to(mav, lat: float, lng: float, alt: float):
         0, 0, 0,  # vx, vy, vz (ignored)
         0, 0, 0,  # afx, afy, afz (ignored)
         0, 0,  # yaw, yaw_rate (ignored)
+    )
+
+
+def send_velocity(mav, vx: float, vy: float, vz: float, yaw_rate: float = 0.0):
+    """
+    Send velocity command to ArduPilot in NED frame.
+    vx: forward (north) m/s, vy: right (east) m/s, vz: down m/s
+    yaw_rate: rad/s
+    Used by Flystral for real-time obstacle avoidance adjustments.
+    """
+    # type_mask: use velocity only (bits 3-5 = 0), ignore position/accel, use yaw_rate
+    type_mask = 0b0000010111000111  # pos ignored, vel used, accel ignored, yaw_rate used
+    mav.mav.set_position_target_local_ned_send(
+        0,  # time_boot_ms
+        mav.target_system,
+        mav.target_component,
+        mavutil.mavlink.MAV_FRAME_BODY_OFFSET_NED,
+        type_mask,
+        0, 0, 0,  # x, y, z (ignored)
+        vx, vy, vz,
+        0, 0, 0,  # afx, afy, afz (ignored)
+        0, yaw_rate,
     )
 
 
@@ -307,6 +337,7 @@ def live_follow_loop(mav, follow_distance_m: float, track_alt: float, total_wayp
     last_user_lat, last_user_lng = None, None
     bearing_rad = 0.0  # north
     offset_dlat, offset_dlng, offset_dalt = 0.0, 0.0, 0.0
+    pending_velocity = None  # (vx, vy, vz, yaw_rate) from Flystral
 
     while True:
         # Non-blocking read stdin (Unix)
@@ -330,6 +361,10 @@ def live_follow_loop(mav, follow_distance_m: float, track_alt: float, total_wayp
                         if dlat != 0 or dlng != 0:
                             bearing_rad = math.atan2(dlng, dlat)
                     last_user_lat, last_user_lng = lat, lng
+                if msg.get("type") == "hold_position":
+                    log("Hold position — operator review pending")
+                    pending_velocity = None
+                    continue
                 if msg.get("type") == "flystral_offset":
                     offset_dlat = float(msg.get("dlat", 0))
                     offset_dlng = float(msg.get("dlng", 0))
@@ -337,6 +372,15 @@ def live_follow_loop(mav, follow_distance_m: float, track_alt: float, total_wayp
                     if "dyaw" in msg:
                         offset_dyaw = float(msg.get("dyaw", 0))
                         bearing_rad = (bearing_rad or 0) + math.radians(offset_dyaw)
+                    vel = msg.get("velocity")
+                    if vel and any(vel.get(k, 0) != 0 for k in ("vx", "vy", "vz", "yaw_rate")):
+                        pending_velocity = (
+                            float(vel.get("vx", 0)),
+                            float(vel.get("vy", 0)),
+                            float(vel.get("vz", 0)),
+                            float(vel.get("yaw_rate", 0)),
+                        )
+                        log(f"Flystral velocity: vx={pending_velocity[0]:.1f} vy={pending_velocity[1]:.1f} vz={pending_velocity[2]:.1f}")
             except (json.JSONDecodeError, KeyError, TypeError, ValueError):
                 pass
 
@@ -365,11 +409,16 @@ def live_follow_loop(mav, follow_distance_m: float, track_alt: float, total_wayp
             time.sleep(0.5)
             continue
 
-        target_lat, target_lng = position_behind_user(last_user_lat, last_user_lng, bearing_rad, follow_distance_m)
-        target_lat += offset_dlat
-        target_lng += offset_dlng
-        alt_m = track_alt + offset_dalt
-        fly_to(mav, target_lat, target_lng, max(5.0, alt_m))
+        if pending_velocity:
+            vx, vy, vz, yr = pending_velocity
+            send_velocity(mav, vx, vy, vz, yr)
+            pending_velocity = None
+        else:
+            target_lat, target_lng = position_behind_user(last_user_lat, last_user_lng, bearing_rad, follow_distance_m)
+            target_lat += offset_dlat
+            target_lng += offset_dlng
+            alt_m = track_alt + offset_dalt
+            fly_to(mav, target_lat, target_lng, max(5.0, alt_m))
 
         telem = get_rich_telemetry(mav)
         if telem:

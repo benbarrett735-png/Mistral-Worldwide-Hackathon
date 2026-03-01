@@ -14,11 +14,11 @@ from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
-from config import MISTRAL_API_KEY, MISTRAL_FAST_MODEL, DRONE_HUB
+from config import MISTRAL_API_KEY, MISTRAL_FAST_MODEL, DRONE_HUB, CITY_HUBS, DEFAULT_CITY
 
-SYSTEM_PROMPT = (
+_SYSTEM_PROMPT_TEMPLATE = (
     "You are Louise, a personal safety AI assistant built into a drone escort app. "
-    "You help users feel safe walking alone at night in Paris.\n\n"
+    "You help users feel safe walking alone at night in {city_name}.\n\n"
     "You can use tools to answer questions:\n"
     "- get_route_safety: analyze how safe a walking route is\n"
     "- get_escort_status: check the current drone escort status\n"
@@ -28,6 +28,12 @@ SYSTEM_PROMPT = (
     "If the user seems distressed, take it seriously and offer concrete help. "
     "Keep responses under 3 sentences unless the user asks for detail."
 )
+
+
+def _get_system_prompt() -> str:
+    city_key = _current_city or DEFAULT_CITY
+    city_name = CITY_HUBS.get(city_key, {}).get("name", city_key.title())
+    return _SYSTEM_PROMPT_TEMPLATE.format(city_name=city_name)
 
 TOOLS = [
     {
@@ -105,12 +111,19 @@ TOOLS = [
 
 _escort_state: dict = {}
 _user_position: dict = {}
+_current_city: str | None = None
+_escalation_log: list[dict] = []
+_escalation_callback = None
 
 
-def set_shared_state(escort: dict, user_pos: dict):
-    global _escort_state, _user_position
+def set_shared_state(escort: dict, user_pos: dict, escalation_callback=None, city: str | None = None):
+    global _escort_state, _user_position, _escalation_callback, _current_city
     _escort_state = escort
     _user_position = user_pos
+    if escalation_callback is not None:
+        _escalation_callback = escalation_callback
+    if city is not None:
+        _current_city = city
 
 
 # ── Tool implementations ─────────────────────────────────────────────────────
@@ -182,25 +195,21 @@ def tool_get_safety_tips(context: str) -> str:
 
 
 def tool_escalate_emergency(reasoning: str, severity: str = "high") -> str:
-    import logging
     entry = {
-        "source": "louise",
+        "origin": "louise",
         "reasoning": reasoning,
         "severity": severity,
         "timestamp": time.time(),
         "user_position": _user_position,
     }
-    logging.warning(f"LOUISE EMERGENCY ESCALATION: {entry}")
-    # Server will pick this up via the shared state
     _escalation_log.append(entry)
+    if _escalation_callback:
+        _escalation_callback(entry)
     return json.dumps({
         "status": "escalated",
         "message": f"Emergency alert sent to mission control ({severity} severity). Help is on the way.",
         "alert_id": len(_escalation_log),
     })
-
-
-_escalation_log: list[dict] = []
 
 
 TOOL_DISPATCH = {
@@ -233,7 +242,7 @@ def run_louise_agent(
             "source": "no_key_fallback",
         }
 
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages = [{"role": "system", "content": _get_system_prompt()}]
     if conversation_history:
         messages.extend(conversation_history[-10:])
     messages.append({"role": "user", "content": user_message})

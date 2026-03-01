@@ -3,9 +3,12 @@ API endpoint tests for Louise (FastAPI server).
 Uses async_client fixture from conftest (httpx.AsyncClient with ASGITransport).
 """
 
+import base64
 import pytest
 
-from server import _TEST_FRAME_B64
+SAMPLE_IMAGE_B64 = base64.b64encode(
+    bytes([0xFF, 0xD8, 0xFF, 0xE0] + [0x00] * 100 + [0xFF, 0xD9])
+).decode()
 
 
 @pytest.mark.asyncio
@@ -17,12 +20,18 @@ async def test_get_root_returns_307(async_client):
 
 
 @pytest.mark.asyncio
-async def test_get_test_frame_returns_200_and_jpeg(async_client):
-    """GET /api/test-frame returns 200 and image/jpeg."""
-    response = await async_client.get("/api/test-frame")
+async def test_camera_status_no_feed(async_client):
+    """GET /api/camera/status returns live: false when no feed is active."""
+    response = await async_client.get("/api/camera/status")
     assert response.status_code == 200
-    assert response.headers.get("content-type", "").startswith("image/jpeg")
-    assert len(response.content) > 0
+    assert response.json()["live"] is False
+
+
+@pytest.mark.asyncio
+async def test_camera_latest_no_feed_returns_204(async_client):
+    """GET /api/camera/latest returns 204 when no live feed."""
+    response = await async_client.get("/api/camera/latest")
+    assert response.status_code == 204
 
 
 @pytest.mark.asyncio
@@ -71,7 +80,7 @@ async def test_post_helpstral_returns_200_and_status(async_client):
     """POST /api/helpstral with base64 image returns 200 and status key."""
     response = await async_client.post(
         "/api/helpstral",
-        json={"image": _TEST_FRAME_B64},
+        json={"image": SAMPLE_IMAGE_B64},
     )
     assert response.status_code == 200
     data = response.json()
@@ -83,7 +92,7 @@ async def test_post_flystral_returns_200_and_command(async_client):
     """POST /api/flystral with base64 image returns 200 and command key."""
     response = await async_client.post(
         "/api/flystral",
-        json={"image": _TEST_FRAME_B64},
+        json={"image": SAMPLE_IMAGE_B64},
     )
     assert response.status_code == 200
     data = response.json()
